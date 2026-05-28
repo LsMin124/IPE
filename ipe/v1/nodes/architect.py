@@ -90,8 +90,16 @@ Topological Sort (toposort) 가 target 이면:
   그 다음 N줄 각각 "w_i v_i" (weight, value 둘 다 non-negative 정수).
 - output: 단일 정수 — capacity C 이하 최대 value 합.
 - variant: classic 0/1 knapsack (each item 0 or 1 회 선택, no fractional).
-- **중요**: sample N <= 15 (brute O(2^N) golden 의 안전 상한). N 이 너무 크면
-  verifier 가 silent skip 하여 samples_engaged 가 떨어진다.
+- **중요 (sample N 권장)**: **sample N <= 6** 로 작성. N 작아야 architect 가
+  2^N subset enumeration 으로 직접 expected 검증 가능.
+- **expected_output 계산 절차 (필수)**:
+  1. brute force: 2^N 개 subset 모두 enumerate.
+  2. 각 subset 의 weight sum <= C 만 유효.
+  3. 유효 subset 의 value sum 최대값이 expected_output.
+  4. 직접 사례별 재검증 (e.g. N=5, C=10 에서 4-item 다 들어간다고 가정 X —
+     실제 weight sum 확인).
+- **PR-D6 outlier 회피**: 이전 측정에서 expected_output 이 brute optimal 보다
+  큰 값으로 잘못 계산되어 0/3 fail. 위 절차 엄격 준수.
 
 Comparison Sort (sort) 가 target 이면:
 - input format: 첫 줄 "N" (배열 크기),
@@ -153,9 +161,22 @@ Kruskal MST (kruskal_mst) 가 target 이면:
   그 다음 E줄 각각 "u v w" (**undirected** edge, w >= 0).
 - output: 단일 정수 — MST total weight, 또는 "-1" (graph disconnected).
 - variant: classic Kruskal MST (sort + Union-Find).
-- **중요**: sample V <= 30 (Prim's algorithm golden 안전 상한).
-- Union-Find (PR-C2) + Sort (PR-C5) 결합 narrative — Kruskal 의 자연스러운
-  building block.
+- **중요 (sample V 권장)**: **sample V <= 4** 로 작성. V 작아야 architect 가
+  edge 별 추적 가능.
+- **expected_output 계산 절차 (필수, step-by-step)**:
+  1. **모든 edge 를 weight 오름차순 정렬한 표** 를 mental model 로 작성.
+     예: edges sorted = [(1,2,1), (2,3,2), (1,3,5), (3,4,7)]
+  2. **각 edge 를 순서대로 검토** — Union-Find:
+     - edge (u,v,w) 의 u,v 가 다른 component → 선택 (union)
+     - 같은 component → skip (cycle 회피)
+  3. **선택된 edge 의 weight 를 누적 합산** — 합산 표 작성:
+     예: 1+2+7 = 10 (3 edges, V-1=3 충족)
+  4. **선택 edge 갯수 == V-1** 확인. 아니면 disconnected = "-1".
+  5. **최종 expected_output = 합산값 (또는 "-1")**.
+- **흔한 실수**: edge 추가하면서 cycle 검사 빠뜨려서 V 개 이상 선택 또는
+  잘못된 sum 계산.
+- **PR-D3 outlier 회피**: 이전 측정에서 expected_output 이 잘못 계산되어 1/3
+  fail. 위 5단계 절차 + 각 sample 별 trace 표 mental model 작성 필수.
 
 Heap (heap) 가 target 이면:
 - input format: 첫 줄 "N" (op 갯수, N <= 1000), 그 다음 N줄 op.
