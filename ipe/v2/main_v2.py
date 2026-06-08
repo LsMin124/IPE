@@ -1,16 +1,18 @@
-"""IPE v2 CLI — blueprint-first 은닉 모델링 그래프 실행 (Phase 3 M3).
+"""IPE v2 CLI — blueprint-first 은닉 모델링 그래프 실행 (Phase 3 M3 + 통합).
 
 Usage::
 
     python -m ipe.v2.main_v2 --algorithm dijkstra
     python -m ipe.v2.main_v2 --algorithm knapsack --direct --max-iter 4
+    python -m ipe.v2.main_v2 --algorithm dijkstra --with-synthesis
 
-env: ``ANTHROPIC_API_KEY`` (production LLM calls — strategist/formalizer/narrative/
-faithfulness 4 호출).
+env: ``ANTHROPIC_API_KEY`` (production LLM calls).
 
-범위: **모델링 layer 만** (strategist→formalizer→narrative→faithfulness). synthesis/
-verification 통합은 follow-up. observability: stdout 요약(+``--verbose`` 전체). output
-영속화는 미포함(follow-up).
+기본 범위: **모델링 layer** (strategist→formalizer→narrative→faithfulness, 4 호출).
+``--with-synthesis`` 면 faithful 통과 후 **synthesis+verification** 까지 — spec_bridge
+→ designer → golden×K/brute fan-out → reconcile → executor (검증된 정답까지 생성).
+golden 은 distinct 모델로 fan-out(차분 독립성). observability: stdout 요약(+``--verbose``
+전체). output 영속화는 미포함(follow-up).
 
 exit code: 0 on ``success``, 1 on any ``fail_*``.
 """
@@ -25,6 +27,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 
+from ipe.v1.nodes import AnthropicCoderLLM
 from ipe.v1.schema import TargetAlgorithm
 
 from .graph import build_v2_graph
@@ -32,6 +35,12 @@ from .state import DEFAULT_MAX_ITERATIONS, V2State, initial_v2_state
 
 # 모델링 루프 1회 = narrative+faithfulness+regen(3 step). recursion budget 여유.
 _RECURSION_PAD = 15
+# synthesis tail(spec_bridge→designer→fan-out→reconcile→bridge→executor) 단발 step 여유.
+_SYNTHESIS_RECURSION_PAD = 12
+
+# golden fan-out 은 distinct 모델로(차분 독립성, §7.4). brute 는 별도 origin 라벨.
+DEFAULT_GOLDEN_MODELS = "claude-opus-4-7,claude-sonnet-4-6"
+DEFAULT_BRUTE_MODEL = "claude-sonnet-4-6"
 
 
 def _parse_target_algorithm(value: str) -> TargetAlgorithm:
@@ -75,6 +84,27 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--verbose", action="store_true", help="blueprint/narrative 전체 출력"
     )
+    parser.add_argument(
+        "--with-synthesis",
+        action="store_true",
+        help="faithful 후 synthesis+verification 까지 (검증된 정답 생성, 비용↑)",
+    )
+    parser.add_argument(
+        "--golden-models",
+        default=DEFAULT_GOLDEN_MODELS,
+        help=(
+            "golden fan-out 모델 (comma-separated, distinct 권장). "
+            f"--with-synthesis 시만 (default: {DEFAULT_GOLDEN_MODELS})"
+        ),
+    )
+    parser.add_argument(
+        "--brute-model",
+        default=DEFAULT_BRUTE_MODEL,
+        help=(
+            "brute(naive) coder 모델. --with-synthesis 시만 "
+            f"(default: {DEFAULT_BRUTE_MODEL})"
+        ),
+    )
     return parser
 
 
@@ -108,6 +138,27 @@ def _print_summary(final: V2State) -> None:
         )
         for d in f.distortions:
             print(f"  - {d}")
+    _print_synthesis_summary(final)
+
+
+def _print_synthesis_summary(final: V2State) -> None:
+    """synthesis layer 산출물 요약 (--with-synthesis 시 populate)."""
+    if final.spec is not None:
+        print(
+            f"[v2] spec: title={final.spec.title!r} "
+            f"target_algorithm={final.spec.target_algorithm.value}"
+        )
+    if final.candidates:
+        origins = [c.origin for c in final.candidates]
+        print(f"[v2] candidates: {len(final.candidates)} origins={origins}")
+    if final.reconciliation is not None:
+        r = final.reconciliation
+        print(
+            f"[v2] reconciliation: all_agree={r.all_agree} "
+            f"adopted_origin={r.adopted_origin}"
+        )
+    if final.verification is not None:
+        print(f"[v2] verification: overall_pass={final.verification.overall_pass}")
 
 
 def _print_verbose(final: V2State) -> None:
@@ -128,6 +179,26 @@ def _normalize_final_state(raw: object) -> V2State:
     return V2State.model_validate(raw)
 
 
+def _build_default_graph(args: argparse.Namespace, *, hidden: bool) -> Any:
+    """production 그래프 build. ``--with-synthesis`` 면 golden/brute coder LLM 배선.
+
+    golden 은 ``--golden-models`` (comma-separated, distinct 권장) 각각을 fan-out 단위로,
+    brute 는 ``--brute-model`` 1개. origin 라벨 = 모델명(차분 독립성 추적).
+    """
+    if not args.with_synthesis:
+        return build_v2_graph(hidden=hidden)
+    golden_models = [m.strip() for m in args.golden_models.split(",") if m.strip()]
+    if not golden_models:
+        raise SystemExit("--golden-models 는 최소 1개 모델 필요")
+    return build_v2_graph(
+        hidden=hidden,
+        with_synthesis=True,
+        golden_llms=[AnthropicCoderLLM(m) for m in golden_models],
+        brute_llm=AnthropicCoderLLM(args.brute_model),
+        golden_origins=golden_models,
+    )
+
+
 def main(argv: Sequence[str] | None = None, *, graph: Any = None) -> int:
     """CLI entrypoint. ``graph`` 주입 시 build 생략(test 결정론). exit 0=success."""
     load_dotenv()
@@ -139,12 +210,16 @@ def main(argv: Sequence[str] | None = None, *, graph: Any = None) -> int:
 
     print(
         f"[v2] start run_id={run_id} seed={args.algorithm.value} "
-        f"hidden={hidden} max_iter={args.max_iter}"
+        f"hidden={hidden} max_iter={args.max_iter} "
+        f"with_synthesis={args.with_synthesis}"
     )
 
-    resolved = graph if graph is not None else build_v2_graph(hidden=hidden)
+    resolved = (
+        graph if graph is not None else _build_default_graph(args, hidden=hidden)
+    )
+    pad = _RECURSION_PAD + (_SYNTHESIS_RECURSION_PAD if args.with_synthesis else 0)
     raw = resolved.invoke(
-        initial, config={"recursion_limit": 3 * args.max_iter + _RECURSION_PAD}
+        initial, config={"recursion_limit": 3 * args.max_iter + pad}
     )
     final = _normalize_final_state(raw)
 

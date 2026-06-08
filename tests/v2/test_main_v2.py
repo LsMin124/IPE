@@ -6,16 +6,25 @@ mock LLM 으로 build_v2_graph 한 그래프를 main(graph=...) 에 주입 → �
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
 
+from ipe.sandbox.runner import RunResult, RunSpec
 from ipe.v1.schema import (
+    AlgorithmDesign,
     BlueprintFormalization,
+    ComplexityBound,
+    Invariant,
+    IOContract,
     IOFieldSpec,
     IOSchema,
     NarrativeDraft,
     NarrativeFaithfulnessReport,
+    ProblemSpec,
+    SampleTestCase,
+    SolutionAttempt,
     StrategySeed,
     TargetAlgorithm,
 )
@@ -67,6 +76,77 @@ def _mock_graph(*, faithful_seq: list[bool], hidden: bool = True) -> Any:
     )
 
 
+# ---------- synthesis-path mocks (--with-synthesis) ----------
+
+_SYNTH_INPUTS = ["i0", "i1", "i2"]
+
+
+class _SpecBridgeLLM:
+    """expected = f'ans-{input}' 인 spec 저작 — _by_marker runner 와 일치."""
+
+    def author(self, state: Any) -> ProblemSpec:
+        return ProblemSpec(
+            target_algorithm=TargetAlgorithm.DIJKSTRA,
+            title="hidden-problem",
+            description="placeholder",
+            io_contract=IOContract(input_format="i", output_format="o"),
+            sample_testcases=[
+                SampleTestCase(input_text=i, expected_output=f"ans-{i}")
+                for i in _SYNTH_INPUTS
+            ],
+        )
+
+
+class _DesignerLLM:
+    def generate(self, state: Any) -> AlgorithmDesign:
+        return AlgorithmDesign(
+            algorithm_name="dijkstra",
+            complexity_target=ComplexityBound(
+                time_big_o="O(E log V)", space_big_o="O(V)"
+            ),
+            pseudocode="relax edges.",
+            invariants=[Invariant(kind="non_negative", description="x")],
+        )
+
+
+class _CoderLLM:
+    def __init__(self, code: str) -> None:
+        self._code = code
+
+    def generate(self, state: Any) -> SolutionAttempt:
+        return SolutionAttempt(code=self._code, iteration=0)
+
+
+class _MarkerRunner:
+    """code 의 marker 로 결정론적 결과 — 'WRONG' 면 불일치, 그 외 'ans-{stdin}'."""
+
+    def run(self, spec: RunSpec) -> RunResult:
+        py = sorted(Path(spec.cwd).glob("*.py"))
+        code = py[0].read_text(encoding="utf-8") if py else ""
+        stdout = f"wrong-{spec.stdin}" if "WRONG" in code else f"ans-{spec.stdin}"
+        return RunResult(
+            status="OK", returncode=0, stdout=stdout, stderr="", elapsed_ms=1
+        )
+
+
+def _mock_full_graph(*, golden_codes: list[str]) -> Any:
+    """faithful 통과 + golden fan-out + executor 까지 mock 한 full-synthesis 그래프."""
+    return build_v2_graph(
+        strategist_llm=_FixedStrategistLLM(),
+        formalizer_llm=_FixedFormalizerLLM(),
+        narrative_llm=_FixedNarrativeLLM(),
+        faithfulness_llm=_ScriptedFaithfulnessLLM([True]),
+        with_synthesis=True,
+        spec_bridge_llm=_SpecBridgeLLM(),
+        designer_llm=_DesignerLLM(),
+        golden_llms=[_CoderLLM(c) for c in golden_codes],
+        brute_llm=_CoderLLM("# B"),
+        golden_origins=["opus", "sonnet"],
+        runner=_MarkerRunner(),
+        verifier_getter=lambda _a: None,
+    )
+
+
 def test_main_success_returns_zero_and_prints_summary(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -112,3 +192,37 @@ def test_main_direct_flag_accepted(capsys: pytest.CaptureFixture[str]) -> None:
 def test_main_unsupported_algorithm_exits() -> None:
     with pytest.raises(SystemExit):
         main(["--algorithm", "no_such_algo"], graph=_mock_graph(faithful_seq=[True]))
+
+
+def test_main_with_synthesis_success_prints_synthesis_summary(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--with-synthesis: golden 합의 + executor pass → exit 0 + synthesis 요약."""
+    code = main(
+        ["--algorithm", "dijkstra", "--with-synthesis"],
+        graph=_mock_full_graph(golden_codes=["# G0", "# G1"]),
+    )
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "final_status=success" in out
+    # synthesis 아티팩트 요약 노출
+    assert "spec:" in out
+    assert "target_algorithm=dijkstra" in out
+    assert "candidates: 3" in out  # golden×2 + brute, dedup reducer
+    assert "all_agree=True" in out
+    assert "adopted_origin=opus" in out  # reference golden_0
+    assert "overall_pass=True" in out
+
+
+def test_main_with_synthesis_rejected_returns_one(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--with-synthesis: golden 불일치 → exit 1 + fail_synthesis_rejected."""
+    code = main(
+        ["--algorithm", "dijkstra", "--with-synthesis"],
+        graph=_mock_full_graph(golden_codes=["# G0", "# WRONG G1"]),
+    )
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "final_status=fail_synthesis_rejected" in out
+    assert "all_agree=False" in out
