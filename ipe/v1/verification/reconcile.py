@@ -22,7 +22,28 @@ from ._exec import (
     DEFAULT_TIME_LIMIT_MS,
     CodeRunner,
 )
-from .differential import run_differential
+from .differential import DifferentialCase, run_differential
+
+# disagreement 진단 상세 바운드 — reject 원인 가시화(케이스 증거)와 문자열 폭주 방지
+# 사이 균형. 상세는 앞 케이스 일부면 충분(같은 원인 반복이 보통), 규모는 요약에 남는다.
+_DETAIL_MAX_CASES = 3
+_DETAIL_INPUT_HEAD = 60
+_DETAIL_OUTPUT_HEAD = 40
+
+
+def _head(text: str, limit: int) -> str:
+    """한 줄 진단용 head — 공백/개행 접어 truncate (로그 친화)."""
+    flat = " ".join(text.split())
+    return flat if len(flat) <= limit else flat[:limit] + "…"
+
+
+def _describe_case(case: DifferentialCase) -> str:
+    """불일치 케이스 한 건의 증거: 입력 + ref/cand 의 status·출력 head."""
+    return (
+        f"input={_head(case.input_text, _DETAIL_INPUT_HEAD)!r} "
+        f"ref[{case.golden_status}]={_head(case.golden_output, _DETAIL_OUTPUT_HEAD)!r} "
+        f"cand[{case.brute_status}]={_head(case.brute_output, _DETAIL_OUTPUT_HEAD)!r}"
+    )
 
 
 def reconcile(
@@ -69,9 +90,14 @@ def reconcile(
             memory_limit_mb=memory_limit_mb,
         )
         if not report.all_agreed:
+            detail = "; ".join(
+                _describe_case(c)
+                for c in report.disagreements[:_DETAIL_MAX_CASES]
+            )
             disagreements.append(
                 f"{reference.origin} vs {cand.origin} ({cand.role}): "
                 f"differ on {len(report.disagreements)}/{report.total} input(s)"
+                + (f" — {detail}" if detail else "")
             )
 
     all_agree = len(disagreements) == 0

@@ -138,3 +138,9 @@ def test_v2_suite_pipeline_single_run_real_llm() -> None:
                     f"expected={s.expected_output[:80]!r} "
                     f"actual={s.actual_output[:80]!r} stderr={s.stderr[:120]!r}"
                 )
+
+    # ---- 진단: synthesis reject 원인 (disagreement 케이스 증거) ----
+    rec = final.reconciliation
+    if rec is not None and not rec.all_agree:
+        for d in rec.disagreements:
+            print(f"[e2e-suite-diag] reconcile: {d}")

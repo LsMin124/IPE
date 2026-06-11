@@ -120,3 +120,36 @@ def test_empty_inputs_cannot_confirm() -> None:
     cands = [_golden("opus", idx=0), _brute()]
     r = reconcile(candidates=cands, inputs=[], runner=_ScriptedRunner(_by_marker))
     assert r.all_agree is False
+
+
+def test_disagreement_detail_includes_case_evidence() -> None:
+    """불일치 문자열에 케이스 증거(입력·ref/cand 출력·status) 포함 — reject 진단 가시화."""
+    cands = [_golden("opus", idx=0), _golden("sonnet", marker="WRONG", idx=1), _brute()]
+    r = reconcile(candidates=cands, inputs=_INPUTS, runner=_ScriptedRunner(_by_marker))
+    detail = next(d for d in r.disagreements if "sonnet" in d)
+    assert "ans-i1" in detail  # reference(golden) 출력
+    assert "wrong-i1" in detail  # candidate 출력
+    assert "OK" in detail  # 양쪽 status
+    assert "\n" not in detail  # 한 줄 진단 (로그 친화)
+
+
+def test_disagreement_detail_includes_crash_status() -> None:
+    """crash 후보는 status(RTE)가 증거로 노출 — 값 불일치와 구분."""
+    cands = [_golden("opus", idx=0), _golden("sonnet", marker="CRASH", idx=1), _brute()]
+    r = reconcile(candidates=cands, inputs=_INPUTS, runner=_ScriptedRunner(_by_marker))
+    detail = next(d for d in r.disagreements if "sonnet" in d)
+    assert "RTE" in detail
+
+
+def test_disagreement_detail_bounded() -> None:
+    """케이스 수·입력/출력 길이 truncate — 진단 문자열 폭주 방지."""
+    long_inputs = [f"case-{i}-" + "x" * 500 for i in range(10)]
+    cands = [_golden("opus", idx=0), _brute(marker="WRONG")]
+    r = reconcile(
+        candidates=cands, inputs=long_inputs, runner=_ScriptedRunner(_by_marker)
+    )
+    (detail,) = r.disagreements
+    assert "differ on 10/10" in detail  # 전체 규모는 요약에 유지
+    assert "case-0-" in detail and "case-2-" in detail  # 상세는 앞 케이스만
+    assert "case-3-" not in detail
+    assert len(detail) < 1200  # 입력 500자×10 케이스에도 상한 유지

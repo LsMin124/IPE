@@ -226,3 +226,6 @@ def test_main_with_synthesis_rejected_returns_one(
     assert code == 1
     assert "final_status=fail_synthesis_rejected" in out
     assert "all_agree=False" in out
+    # reject 원인 가시화 — disagreement 케이스 증거(ref/cand 출력)가 요약에 노출
+    assert "ans-i0" in out
+    assert "wrong-i0" in out

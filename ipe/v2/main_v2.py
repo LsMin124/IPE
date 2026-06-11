@@ -157,6 +157,8 @@ def _print_synthesis_summary(final: V2State) -> None:
             f"[v2] reconciliation: all_agree={r.all_agree} "
             f"adopted_origin={r.adopted_origin}"
         )
+        for d in r.disagreements:
+            print(f"  - {d}")
     if final.verification is not None:
         print(f"[v2] verification: overall_pass={final.verification.overall_pass}")
 
