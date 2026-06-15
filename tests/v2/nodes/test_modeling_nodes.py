@@ -157,16 +157,63 @@ def test_strategist_prompt_lists_all_valid_algorithms() -> None:
 
 
 def test_strategist_prompt_encourages_composition_diversity() -> None:
-    """composition 다양성 규율 — 실측: dijkstra seed 에서 heap+binary_search 가
-    9/9 고정, 그 고정이 leakage fail('임계값 이분탐색+최단경로 고전 동형')과
-    직결. ① reduction_core 표준 구현에 내장된 기법(예: dijkstra 의 heap)은
-    합성 강제력 없는 장식 — composition 금지 ② 최빈 패턴(임계값 feasibility
-    이분탐색) 고정 금지 — 출력 의미를 바꾸는 다른 합성 축 제시. 드리프트 방지."""
+    """composition 다양성 규율 — 실측: 19종 배치서 prose 규율에도 fenwick 13/19·
+    sort 11/19 mode-collapse(어휘 붕괴=leakage 레버). 해법: 매 run 회전하는 결정적
+    '합성 후보 팔레트' 안에서만 고르게 강제 → 제안 집합 자체를 통제. ① reduction_core
+    내장 기법 금지(장식) ② 팔레트 밖 금지·맞는 게 없으면 비움. 드리프트 방지."""
     from ipe.v2.nodes.strategist import _SYSTEM_PROMPT
 
     assert "내장된" in _SYSTEM_PROMPT  # 정석 구현 내장 기법 = 장식, 금지
-    assert "고정되지 말 것" in _SYSTEM_PROMPT  # 최빈 패턴 반복 금지
-    assert "과사용" in _SYSTEM_PROMPT  # binary_search 임계값 패턴 경고
+    assert "팔레트" in _SYSTEM_PROMPT  # 회전 팔레트 안에서만 선택
+    assert "어휘" in _SYSTEM_PROMPT  # 어휘 붕괴(mode-collapse) 방어 명시
+
+
+def test_composition_palette_deterministic_and_excludes_core() -> None:
+    """팔레트는 run_id 결정적(재현) + reduction_core 제외(자기합성 금지)."""
+    from ipe.v2.nodes.strategist import (
+        _COMPOSITION_PALETTE_SIZE,
+        _composition_palette,
+    )
+
+    a = _composition_palette("run-xyz", TargetAlgorithm.DIJKSTRA)
+    b = _composition_palette("run-xyz", TargetAlgorithm.DIJKSTRA)
+    assert a == b  # 같은 run_id → 같은 팔레트
+    assert len(a) == _COMPOSITION_PALETTE_SIZE
+    assert "dijkstra" not in a  # reduction_core 자기 자신 제외
+    assert all(v in {al.value for al in TargetAlgorithm} for v in a)
+
+
+def test_composition_palette_rotates_and_spreads_vocabulary() -> None:
+    """run 마다 회전 → 어휘 분산. 다수 run 누적 시 어느 기법도 과점하지 않고
+    전 어휘가 고르게 제안된다(fenwick mode-collapse 의 구조적 해소)."""
+    import collections
+
+    from ipe.v2.nodes.strategist import _composition_palette
+
+    core = TargetAlgorithm.DIJKSTRA
+    counter: collections.Counter[str] = collections.Counter()
+    runs = 200
+    for i in range(runs):
+        for v in _composition_palette(f"run-{i}", core):
+            counter[v] += 1
+    # 다른 run_id 는 다른 팔레트를 만든다(고정 아님)
+    assert _composition_palette("run-0", core) != _composition_palette("run-1", core)
+    # core(dijkstra) 외 18종 전부 제안됨 (사각지대 없음)
+    assert len(counter) == len(TargetAlgorithm) - 1
+    # 어느 기법도 과점하지 않음 — 균등 기대 ~7/18=38.9%, 상한 55% 로 여유 가드
+    top_share = counter.most_common(1)[0][1] / runs
+    assert top_share < 0.55
+
+
+def test_strategist_user_prompt_injects_palette() -> None:
+    """node 가 user 프롬프트에 이번 run 팔레트를 주입 — LLM 이 그 안에서만 고름."""
+    from ipe.v2.nodes.strategist import _build_user_prompt, _composition_palette
+
+    state = initial_v2_state("run-abc", TargetAlgorithm.KNAPSACK)
+    prompt = _build_user_prompt(state)
+    assert "합성 후보 팔레트" in prompt
+    for v in _composition_palette("run-abc", TargetAlgorithm.KNAPSACK):
+        assert v in prompt
 
 
 def test_narrative_prompt_forbids_format_prose() -> None:
