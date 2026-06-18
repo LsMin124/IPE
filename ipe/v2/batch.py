@@ -62,7 +62,7 @@ _PRICING_PER_MTOK = config.PRICING_PER_MTOK
 # 실측 N=2 어림 (계약 §5) — 계획 출력용 추정치.
 _PER_RUN_COST_ESTIMATE = "$0.4~0.6"
 
-_Mode = Literal["hidden", "direct"]
+_Mode = Literal["p1", "p2"]  # Phase 4 — P1/P2 생성 파이프라인 모드
 
 
 @dataclass(frozen=True)
@@ -479,9 +479,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--mode",
-        choices=["hidden", "direct"],
-        default="hidden",
-        help="렌더 모드 (default: hidden)",
+        choices=["p1", "p2"],
+        default="p2",
+        help="생성 모드 (p1=단일·공개·QA3 / p2=합성·은닉·QA4, default: p2)",
     )
     parser.add_argument(
         "--max-qa-routebacks",

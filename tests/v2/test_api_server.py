@@ -178,7 +178,7 @@ def _client(graph: Any, *, max_concurrent: int = 2) -> TestClient:
 
 def _generate(client: TestClient, *, key: str = _KEY, **body_over: Any) -> Any:
     body = {
-        "mode": "hidden",
+        "mode": "p2",
         "seed_algorithm": "dijkstra",
         "idempotency_key": "idem-1",
     }
@@ -252,7 +252,7 @@ def test_success_package_shape() -> None:
     assert sol["language"] == "python"
     meta = pkg["meta"]
     assert meta["package_version"] == "1.0"
-    assert meta["mode"] == "hidden"
+    assert meta["mode"] == "p2"
     assert meta["hidden_algorithm"] == "dijkstra"
     assert meta["composition"] == ["union_find"]
     assert meta["golden_language"] == "python"

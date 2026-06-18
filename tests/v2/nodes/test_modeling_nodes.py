@@ -149,23 +149,47 @@ def test_strategist_then_formalizer_compose() -> None:
 def test_strategist_prompt_lists_all_valid_algorithms() -> None:
     """composition/reduction_core 허용 enum 값이 prompt 에 전부 명시 — 모델이
     'greedy' 같은 목록 밖 기법을 emit 해 structured output 이 거부되는 것 방지
-    (M4 step5 e2e 실측 발견). enum 확장 시 자동 동기화 검증."""
-    from ipe.v2.nodes.strategist import _SYSTEM_PROMPT
+    (M4 step5 e2e 실측 발견). enum 확장 시 자동 동기화 검증. 양 모드 공통."""
+    from ipe.v2.nodes.strategist import _system_prompt
 
     for algo in TargetAlgorithm:
-        assert algo.value in _SYSTEM_PROMPT
+        assert algo.value in _system_prompt("composed")
+        assert algo.value in _system_prompt("single")
 
 
 def test_strategist_prompt_encourages_composition_diversity() -> None:
-    """composition 다양성 규율 — 실측: 19종 배치서 prose 규율에도 fenwick 13/19·
-    sort 11/19 mode-collapse(어휘 붕괴=leakage 레버). 해법: 매 run 회전하는 결정적
-    '합성 후보 팔레트' 안에서만 고르게 강제 → 제안 집합 자체를 통제. ① reduction_core
-    내장 기법 금지(장식) ② 팔레트 밖 금지·맞는 게 없으면 비움. 드리프트 방지."""
-    from ipe.v2.nodes.strategist import _SYSTEM_PROMPT
+    """composition 다양성 규율(composed 모드) — 실측: 19종 배치서 prose 규율에도
+    fenwick 13/19·sort 11/19 mode-collapse(어휘 붕괴=leakage 레버). 해법: 매 run 회전하는
+    결정적 '합성 후보 팔레트' 안에서만 고르게 강제 → 제안 집합 자체를 통제. ① reduction_core
+    내장 기법 금지(장식) ② 팔레트 밖 금지. 드리프트 방지."""
+    from ipe.v2.nodes.strategist import _system_prompt
 
-    assert "내장된" in _SYSTEM_PROMPT  # 정석 구현 내장 기법 = 장식, 금지
-    assert "팔레트" in _SYSTEM_PROMPT  # 회전 팔레트 안에서만 선택
-    assert "어휘" in _SYSTEM_PROMPT  # 어휘 붕괴(mode-collapse) 방어 명시
+    composed = _system_prompt("composed")
+    assert "내장된" in composed  # 정석 구현 내장 기법 = 장식, 금지
+    assert "팔레트" in composed  # 회전 팔레트 안에서만 선택
+    assert "어휘" in composed  # 어휘 붕괴(mode-collapse) 방어 명시
+
+
+def test_strategist_single_mode_forbids_composition() -> None:
+    """P1(single) system prompt 는 composition 빈값을 강제 — 단일 알고리즘 문제.
+    composed 의 합성 필수 규율과 상호배타. 드리프트 방지."""
+    from ipe.v2.nodes.strategist import _system_prompt
+
+    single = _system_prompt("single")
+    assert "단일 알고리즘 문제" in single
+    assert "빈 list" in single  # composition 반드시 빈값
+    assert "합성하지 않는다" in single
+
+
+def test_strategist_composed_mode_requires_composition() -> None:
+    """P2(composed) system prompt 는 composition 비움 금지(≥1, 총 2개 이상) — 결합 강제.
+    single 의 합성 금지 규율과 상호배타(모드 누수 방지). 드리프트 방지."""
+    from ipe.v2.nodes.strategist import _system_prompt
+
+    composed = _system_prompt("composed")
+    assert "비우지 않는다" in composed  # composition ≥1 강제
+    assert "총 2개 이상" in composed  # reduction_core + 최소 1개
+    assert "반드시 빈 list" not in composed  # single 전용 문구 누수 금지
 
 
 def test_composition_palette_deterministic_and_excludes_core() -> None:
@@ -210,7 +234,7 @@ def test_strategist_user_prompt_injects_palette() -> None:
     from ipe.v2.nodes.strategist import _build_user_prompt, _composition_palette
 
     state = initial_v2_state("run-abc", TargetAlgorithm.KNAPSACK)
-    prompt = _build_user_prompt(state)
+    prompt = _build_user_prompt(state, "composed")
     assert "합성 후보 팔레트" in prompt
     for v in _composition_palette("run-abc", TargetAlgorithm.KNAPSACK):
         assert v in prompt
@@ -258,20 +282,32 @@ def test_strategist_user_prompt_injects_domain_palette() -> None:
     from ipe.v2.nodes.strategist import _build_user_prompt, _domain_palette
 
     state = initial_v2_state("run-abc", TargetAlgorithm.KNAPSACK)
-    prompt = _build_user_prompt(state)
+    prompt = _build_user_prompt(state, "composed")
     assert "도메인 팔레트" in prompt
     for d in _domain_palette("run-abc"):
         assert d in prompt
+
+
+def test_strategist_single_user_prompt_omits_composition_palette() -> None:
+    """single 모드 user prompt 는 합성 팔레트를 주입하지 않는다(composition 빈값이라
+    무의미) — 도메인 팔레트는 양 모드 공통. composed 는 합성 팔레트 주입(별도 테스트)."""
+    from ipe.v2.nodes.strategist import _build_user_prompt
+
+    state = initial_v2_state("run-abc", TargetAlgorithm.KNAPSACK)
+    single = _build_user_prompt(state, "single")
+    assert "합성 후보 팔레트" not in single
+    assert "도메인 팔레트" in single  # 도메인은 양 모드 공통
 
 
 def test_strategist_prompt_encourages_domain_diversity() -> None:
     """domain 다양성 규율 — DB 16문제 실측 banking 100% 단일화(composition fenwick
     68% 보다 심함, domain 은 strategist 자유선택). 해법: 매 run 회전하는 결정적
     '도메인 팔레트' 안에서 고르게 강제 → 제안 도메인 집합 자체를 통제. 드리프트 방지."""
-    from ipe.v2.nodes.strategist import _SYSTEM_PROMPT
+    from ipe.v2.nodes.strategist import _system_prompt
 
-    assert "도메인 팔레트" in _SYSTEM_PROMPT  # 회전 팔레트 안에서 선택
-    assert "단일화" in _SYSTEM_PROMPT  # banking mode-collapse 방어 명시
+    composed = _system_prompt("composed")
+    assert "도메인 팔레트" in composed  # 회전 팔레트 안에서 선택
+    assert "단일화" in composed  # banking mode-collapse 방어 명시
 
 
 def test_narrative_prompt_forbids_format_prose() -> None:

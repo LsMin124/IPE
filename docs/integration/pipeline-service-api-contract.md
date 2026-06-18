@@ -48,13 +48,25 @@
 
 ```jsonc
 {
-  "mode": "hidden",                 // "hidden"(모의고사·은닉) | "direct"(토픽드릴·알고리즘 공개)
+  "mode": "p2",                     // "p1"(단일·공개·토픽드릴) | "p2"(합성·은닉·모의고사) — 아래 모드 표
   "seed_algorithm": "dijkstra",     // §2.4 enum 중 하나 (필수)
-  "with_qa": true,                  // 기본 true — QA 4관점 게이트 포함 (권장)
+  "with_qa": true,                  // 기본 true — QA 게이트 포함 (권장)
   "max_qa_routebacks": 1,           // QA fail 시 자동 회수 시도 횟수 (기본 1)
   "idempotency_key": "uuid-..."     // 필수 — 재시도 이중과금 방지
 }
 ```
+
+**모드(`mode`)** — 생성 파이프라인은 정확히 2종이며 모드가 4개 노브를 한 번에 정한다:
+
+| mode | seed_algorithm | 합성 | 지문 | QA 관점 | 용도 |
+|---|---|---|---|---|---|
+| `p1` | **공개 타겟**(고정) | 단일(없음) | 알고리즘 명시 가능 | 3종 (ambiguity/fairness/difficulty) | 토픽 드릴 |
+| `p2` | **은닉 힌트** | 2+ 결합 | 알고리즘 미명시(은닉) | 4종 (+leakage) | 모의고사 |
+
+`seed_algorithm` 은 두 모드 다 §2.4 enum 에서 받되, `p1` 은 그 알고리즘을 공개 타겟으로
+고정하고 `p2` 는 은닉할 힌트로만 쓴다. 패키지 메타도 모드를 따른다: `meta.composition` 은
+`p1`=항상 `[]` / `p2`=1개 이상, `meta.qa.verdicts` 의 키 집합은 모드 QA 관점을 따른다
+(`p1` 은 `leakage` 키 없음).
 
 응답:
 
@@ -104,7 +116,7 @@
 | final_status | 의미 | package | 백엔드 처리 |
 |---|---|---|---|
 | `success` | 검증+채점셋+QA 전부 통과 | 포함 | `draft` 적재 (또는 정책상 바로 `review`) |
-| `fail_qa` | 문제·채점셋 완성, QA 4관점 중 일부 불통 | **포함** (QA 리포트 동봉) | `draft` 적재 → **사람 검수로 구제 판단** |
+| `fail_qa` | 문제·채점셋 완성, QA 관점(p1 3종/p2 4종) 중 일부 불통 | **포함** (QA 리포트 동봉) | `draft` 적재 → **사람 검수로 구제 판단** |
 | `fail_verification` | 정답 코드가 샘플 검증 불통 | null | 재시도 |
 | `fail_synthesis_rejected` | 독립 정답 후보 간 불합의 | null | 재시도 |
 | `fail_faithfulness` | 지문이 형식 계약을 왜곡 | null | 재시도 |
@@ -112,8 +124,8 @@
 | `fail_budget_exhausted` | 내부 반복 예산 소진 | null | 재시도 |
 
 > `fail_qa` 구제 운영 권고: leakage(유출) 단독 fail 은 판정 변동이 관측된
-> 클래스라 사람 검수 가치가 높다. ambiguity(모호성) fail 은 findings 를 보고
-> 지문 수동 보정 가능 여부로 판단.
+> 클래스라 사람 검수 가치가 높다(p2 만 — p1 은 leakage 미실행). ambiguity(모호성)
+> fail 은 findings 를 보고 지문 수동 보정 가능 여부로 판단.
 
 ### 2.4 `seed_algorithm` enum (19종 — 전부 허용)
 
@@ -162,9 +174,9 @@ two_sum, segtree, fenwick, heap, sieve, string_match
   },
   "meta": {
     "package_version": "1.0",
-    "mode": "hidden",                       // "hidden" | "direct"
+    "mode": "p2",                           // "p1" | "p2" (§2.1 모드 표)
     "hidden_algorithm": "dijkstra",         // ⚠ 내부 전용 — 유저 응답에서 제외할 것
-    "composition": ["union_find", "toposort"],  // ⚠ 내부 전용 (합성 기법)
+    "composition": ["union_find", "toposort"],  // ⚠ 내부 전용 (합성 기법; p1=[], p2=1개+)
     "domain": "waterworks",
     "difficulty": {                         // ⚠ 내부 메타 — RFC R4 사후 calibration (옵션: 켜진 경우만)
       "label": "Gold IV",                   // BOJ 티어 라벨 → problems.difficulty 1급 컬럼 승격
@@ -176,7 +188,7 @@ two_sum, segtree, fenwick, heap, sieve, string_match
     "golden_language": "python",            // TL 언어 보정 기준
     "qa": {
       "overall_pass": true,
-      "verdicts": { "ambiguity": true, "fairness": true, "leakage": true, "difficulty": true },
+      "verdicts": { "ambiguity": true, "fairness": true, "leakage": true, "difficulty": true },  // p1 은 leakage 키 없음 (3종)
       "findings": [                          // fail_qa 일 때 검수 근거 (전문)
         { "kind": "ambiguity", "severity": "blocker", "description": "…" }
       ]
@@ -197,7 +209,7 @@ two_sum, segtree, fenwick, heap, sieve, string_match
   `package_version` 무변경 `1.0` 에 **additive** 로 추가 — 기존 백엔드는 무시해도 안전.
   `solution` 은 `package` 가 존재할 때만(=`success`/`fail_qa`) 동봉되며, 이론상
   정해 부재 시 `null`.
-- `direct` 모드에서는 지문이 알고리즘을 명시할 수 있음 — 노출 정책은 백엔드
+- `p1`(공개) 모드에서는 지문이 알고리즘을 명시할 수 있음 — 노출 정책은 백엔드
   product 단 결정.
 - `test_suite.cases` 수는 보장값 없음 (관측 40~60). 케이스 순서는 의미 없음.
 - **채점 가능 보장은 `final_status == "success"` 패키지에 한함.** success 의 모든

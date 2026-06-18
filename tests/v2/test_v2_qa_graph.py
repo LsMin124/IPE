@@ -195,7 +195,6 @@ def _qa_graph(
         formalizer_llm=_FixedFormalizerLLM(),
         narrative_llm=narrative_llm if narrative_llm is not None else _FixedNarrativeLLM(),
         faithfulness_llm=_FaithfulLLM(),
-        with_synthesis=True,
         spec_bridge_llm=_SpecBridgeLLM(),
         designer_llm=_DesignerLLM(),
         golden_llms=[_CoderLLM("# G0"), _CoderLLM("# G1")],
@@ -283,7 +282,7 @@ def test_qa_routeback_recovers_to_success() -> None:
 
 def test_with_qa_requires_test_suite() -> None:
     with pytest.raises(ValueError, match="with_qa"):
-        build_v2_graph(with_qa=True, with_synthesis=True)
+        build_v2_graph(with_qa=True)
 
 
 # ---------- route_after_qa 단위 ----------

@@ -1,41 +1,44 @@
-"""v2 LangGraph builder — 은닉 모델링 + (옵션) synthesis/verification (Phase 3 M3/통합).
+"""v2 LangGraph builder — 모델링 + synthesis/verification (+옵션 suite/QA).
 
-``with_synthesis=False`` (기본, 모델링 layer 만)::
+Phase 4 (P1/P2 수렴): synthesis 는 **항상 배선**된다 (modeling-only 분기 제거 — 두
+production 모드 다 full 검증). 모드 차이는 4 노브 (caller 가 조합)::
 
-    START → strategist → formalizer → narrative → faithfulness → route ─┬─ end_success
-              (시드)      (FREEZE)     (은닉 렌더)   (round-trip)         │   (success)
-                                          ▲                              ├─ regen → narrative
-                                          └──────────────────────────────┘  (faithful=False)
-                                       route(budget 소진) ── end_faithfulness
+    노브               P1 (단일·공개)                   P2 (합성·은닉)
+    hidden             False                            True
+    composition_mode   "single" (composition 빈값)      "composed" (≥1, 총 2개+)
+    qa_kinds           (ambiguity,fairness,difficulty)  +leakage (4종)
+    seed_algorithm     고정 공개 타겟                   힌트
 
-``with_synthesis=True`` (M2 full-mode 재사용으로 '문제+검증된 정답' 생성)::
+기본 흐름 (always)::
 
+    START → strategist → formalizer → narrative → faithfulness → route ─┬─ regen→narrative
+              (시드)      (FREEZE)     (렌더)       (round-trip)         │  (faithful=False)
+                                          ▲                              │
+                                          └──────────────────────────────┘
+                       route(budget 소진) ── end_faithfulness
     faithfulness ─(faithful)→ spec_bridge → designer → dispatch ─┬→ golden_0..K ─┐
                                                                  └→ brute ───────┴→ reconciler
-      reconciler ─(채택)→ synth_bridge → sample_filler → executor ─(pass)→ end_success
+      reconciler ─(채택)→ synth_bridge → sample_filler → executor ─(pass)→ (suite/qa or success)
                                        (golden→sample expected)    └(fail)→ end_verification
       reconciler ─(reject)→ end_synthesis_rejected
 
-``with_test_suite=True`` (M4 풀 채점셋 — with_synthesis 필수)::
+``with_test_suite=True`` (M4 풀 채점셋 — verification 통과 후)::
 
     executor → route ─(pass)→ generator_designer → input_generator → suite_assembler
                                 (contract 저작)     (결정론 생성)      (golden→expected)
-      suite_assembler → end_success
 
-``with_qa=True`` (M5 QA/Critic 병렬 스테이지 — with_test_suite 필수)::
+``with_qa=True`` (M5 QA/Critic 병렬 게이트 — with_test_suite 필수, ``qa_kinds`` fan-out)::
 
-    suite_assembler ─┬→ qa_ambiguity ──┐
-                     ├→ qa_fairness ───┤ (4 병렬 fan-out, Haiku)
-                     ├→ qa_leakage ────┤
-                     └→ qa_difficulty ─┴→ qa_aggregator → route ─(pass)→ end_success
-                                              ↑                 ├(fail·예산)→ end_qa
-                                              │                 └(routeback)↓
-                       spec_patch(desc 만 패치) ← faithfulness_revise ← narrative_revise
-                       (재리뷰 fan-out 4종)        (QA findings 피드백 재작성, B back-route)
+    suite_assembler ─┬→ qa_{kind} (qa_kinds 병렬 fan-out, Haiku) ─┐
+                     └ ...                                        ┴→ qa_aggregator → route
+                                              ↑                      ├(pass)→ end_success
+                       spec_patch(desc 만 패치) ← faithfulness_revise ┤(fail·예산)→ end_qa
+                       (재리뷰 fan-out)            ← narrative_revise ┘(routeback, B)
 
 핵심 의도:
 - 모델링 4 노드(strategist/formalizer/narrative/faithfulness) + faithful=False→narrative
-  재생성(``max_iterations`` 바운드). 왜곡만 reject, 은닉은 통과.
+  재생성(``max_iterations`` 바운드). 왜곡만 reject, 은닉은 통과. strategist 는
+  ``composition_mode`` 로 single(합성 금지)/composed(합성 필수) 분기.
 - synthesis 는 **v1 M2 노드 재사용**(designer/synthesis_coder/reconciler/synth_bridge/
   executor) — V2State 가 design/attempt 채널 + target_algorithm property 로 적응(step2a).
   spec_bridge LLM 은 sample **input 만** 저작, expected 는 sample_filler 가 canonical
@@ -43,7 +46,6 @@
   + symbolic verifier 가 검증. fix-loop 없음(단발, M3+ 반복정제 별개).
 - test-suite 는 **verification 통과 후에만** — expected 는 검증된 golden 실행으로
   부트스트랩(RFC §7 순환 회피)이라 검증 실패 경로에선 채점셋을 만들지 않는다.
-- ``with_synthesis=False`` 는 모델링 layer 만 — 기존 test/CLI backward compat.
 
 recursion 주의: 모델링 루프 1회=3 step + synthesis ~6 step + test-suite 3 step.
 ``max_iterations`` 크면 invoke ``config={"recursion_limit": N}`` 상향.
@@ -97,6 +99,8 @@ if TYPE_CHECKING:
 
     from ipe.v1.nodes import CoderLLM, DesignerLLM, ExecutorRunner, VerifierGetter
     from ipe.v1.schema import QAReviewerKind
+
+    from .nodes.strategist import CompositionMode
 
 
 def _bump_iteration(state: V2State) -> V2State:
@@ -205,7 +209,7 @@ def build_v2_graph(
     narrative_llm: NarrativeLLM | None = None,
     faithfulness_llm: FaithfulnessLLM | None = None,
     hidden: bool = True,
-    with_synthesis: bool = False,
+    composition_mode: CompositionMode = "composed",
     spec_bridge_llm: SpecBridgeLLM | None = None,
     designer_llm: DesignerLLM | None = None,
     golden_llms: Sequence[CoderLLM] | None = None,
@@ -218,28 +222,37 @@ def build_v2_graph(
     generator_designer_llm: GeneratorDesignerLLM | None = None,
     with_qa: bool = False,
     qa_reviewer_llms: Mapping[QAReviewerKind, QAReviewerLLM] | None = None,
+    qa_kinds: tuple[QAReviewerKind, ...] = (
+        "ambiguity",
+        "fairness",
+        "leakage",
+        "difficulty",
+    ),
 ) -> CompiledStateGraph:  # type: ignore[type-arg]
     """v2 그래프 빌드. None dependency 는 production default(Anthropic/sandbox/verifier).
 
-    ``hidden`` = narrative 렌더 모드. ``with_synthesis=True`` 면 faithful 통과 후
-    spec_bridge→synthesis(M2 재사용)→verification 까지 — ``golden_llms``(>=1) +
-    ``brute_llm`` 필수. ``with_test_suite=True``(M4) 면 verification 통과 후
-    generator_designer→input_generator→suite_assembler 로 풀 채점셋까지 — 검증된
-    golden 이 expected 를 채우므로 ``with_synthesis=True`` 필수. ``with_qa=True``
-    (M5) 면 suite 완성 후 QA 리뷰어 4종 병렬 게이트 — 완성 패키지를 검토하므로
-    ``with_test_suite=True`` 필수 (``qa_reviewer_llms`` 는 kind→LLM, 누락 kind 는
-    production Haiku). test 는 모든 LLM mock 주입.
+    Phase 4 (P1/P2 수렴): synthesis 는 **항상 배선** — ``golden_llms``(>=1) +
+    ``brute_llm`` 필수. ``hidden`` = narrative 렌더 모드. ``composition_mode`` =
+    strategist 분기(``"single"``=합성 금지 / ``"composed"``=합성 필수). ``with_test_suite
+    =True``(M4) 면 verification 통과 후 generator_designer→input_generator→
+    suite_assembler 로 풀 채점셋까지. ``with_qa=True``(M5) 면 suite 완성 후 ``qa_kinds``
+    리뷰어 병렬 게이트 — 완성 패키지를 검토하므로 ``with_test_suite=True`` 필수.
+    ``qa_kinds`` = 돌릴 QA 관점(P1=ambiguity/fairness/difficulty 3종 / P2=+leakage 4종).
+    ``qa_reviewer_llms`` 는 kind→LLM, 누락 kind 는 production Haiku. test 는 LLM mock 주입.
     """
-    if with_test_suite and not with_synthesis:
-        msg = "with_test_suite=True 는 with_synthesis=True 필수 (verified golden 필요)"
-        raise ValueError(msg)
     if with_qa and not with_test_suite:
         msg = "with_qa=True 는 with_test_suite=True 필수 (완성 패키지를 검토)"
         raise ValueError(msg)
     builder: StateGraph = StateGraph(V2State)  # type: ignore[type-arg]
 
     # ---- modeling nodes (always) ----
-    builder.add_node("strategist", cast(Any, make_strategist_node(strategist_llm)))
+    builder.add_node(
+        "strategist",
+        cast(
+            Any,
+            make_strategist_node(strategist_llm, composition_mode=composition_mode),
+        ),
+    )
     builder.add_node("formalizer", cast(Any, make_formalizer_node(formalizer_llm)))
     builder.add_node(
         "narrative", cast(Any, make_narrative_node(narrative_llm, hidden=hidden))
@@ -261,40 +274,39 @@ def build_v2_graph(
     builder.add_edge("end_success", END)
     builder.add_edge("end_faithfulness", END)
 
-    # faithful 통과 시: 모델링-only 면 end_success, synthesis 면 spec_bridge 로 진행
-    faithful_target = "spec_bridge" if with_synthesis else "end_success"
+    # faithful 통과 시 항상 synthesis 로 진행 (Phase 4 — modeling-only terminal 제거).
     builder.add_conditional_edges(
         "faithfulness",
         route_after_faithfulness,
         cast(
             Any,
             {
-                "end_success": faithful_target,
+                "end_success": "spec_bridge",
                 "regen": "regen",
                 "end_faithfulness": "end_faithfulness",
             },
         ),
     )
 
-    if with_synthesis:
-        _wire_synthesis(
-            builder,
-            spec_bridge_llm=spec_bridge_llm,
-            designer_llm=designer_llm,
-            golden_llms=golden_llms,
-            brute_llm=brute_llm,
-            golden_origins=golden_origins,
-            brute_origin=brute_origin,
-            runner=runner,
-            verifier_getter=verifier_getter,
-            with_test_suite=with_test_suite,
-            generator_designer_llm=generator_designer_llm,
-            with_qa=with_qa,
-            qa_reviewer_llms=qa_reviewer_llms,
-            narrative_llm=narrative_llm,
-            faithfulness_llm=faithfulness_llm,
-            hidden=hidden,
-        )
+    _wire_synthesis(
+        builder,
+        spec_bridge_llm=spec_bridge_llm,
+        designer_llm=designer_llm,
+        golden_llms=golden_llms,
+        brute_llm=brute_llm,
+        golden_origins=golden_origins,
+        brute_origin=brute_origin,
+        runner=runner,
+        verifier_getter=verifier_getter,
+        with_test_suite=with_test_suite,
+        generator_designer_llm=generator_designer_llm,
+        with_qa=with_qa,
+        qa_reviewer_llms=qa_reviewer_llms,
+        qa_kinds=qa_kinds,
+        narrative_llm=narrative_llm,
+        faithfulness_llm=faithfulness_llm,
+        hidden=hidden,
+    )
 
     return builder.compile()
 
@@ -314,6 +326,12 @@ def _wire_synthesis(
     generator_designer_llm: GeneratorDesignerLLM | None = None,
     with_qa: bool = False,
     qa_reviewer_llms: Mapping[QAReviewerKind, QAReviewerLLM] | None = None,
+    qa_kinds: tuple[QAReviewerKind, ...] = (
+        "ambiguity",
+        "fairness",
+        "leakage",
+        "difficulty",
+    ),
     narrative_llm: NarrativeLLM | None = None,
     faithfulness_llm: FaithfulnessLLM | None = None,
     hidden: bool = True,
@@ -322,11 +340,11 @@ def _wire_synthesis(
 
     v1 M2 노드를 cast(Any) duck-typing 으로 재사용(step2a 가 V2State 적응으로 검증).
     ``with_test_suite=True`` 면 executor 통과 후 M4 채점셋 3 노드를 거쳐 end_success,
-    ``with_qa=True`` 면 그 뒤 QA 4종 병렬 게이트(M5)까지. ``narrative_llm``/
+    ``with_qa=True`` 면 그 뒤 ``qa_kinds`` 병렬 게이트(M5)까지. ``narrative_llm``/
     ``faithfulness_llm``/``hidden`` 은 QA back-route(B)의 revise 경로용 passthrough.
     """
     if not golden_llms or brute_llm is None:
-        msg = "with_synthesis=True 는 golden_llms(>=1) + brute_llm 필수"
+        msg = "synthesis 배선은 golden_llms(>=1) + brute_llm 필수"
         raise ValueError(msg)
     origins = (
         list(golden_origins)
@@ -461,6 +479,7 @@ def _wire_synthesis(
             _wire_qa(
                 builder,
                 qa_reviewer_llms=qa_reviewer_llms,
+                qa_kinds=qa_kinds,
                 narrative_llm=narrative_llm,
                 faithfulness_llm=faithfulness_llm,
                 hidden=hidden,
@@ -473,26 +492,21 @@ def _wire_qa(
     builder: Any,
     *,
     qa_reviewer_llms: Mapping[QAReviewerKind, QAReviewerLLM] | None,
+    qa_kinds: tuple[QAReviewerKind, ...],
     narrative_llm: NarrativeLLM | None,
     faithfulness_llm: FaithfulnessLLM | None,
     hidden: bool,
 ) -> None:
-    """QA 서브그래프 (M5, RFC N10/N11) — 4관점 병렬 게이트 + back-route(B).
+    """QA 서브그래프 (M5, RFC N10/N11) — ``qa_kinds`` 병렬 게이트 + back-route(B).
 
-    suite_assembler 에서 4 리뷰어로 직접 fan-out(같은 superstep) → 각자 partial
-    dict 로 ``qa_reviews`` reducer 에 누적 → aggregator fan-in 집계(kind 별 최신)
-    → 결정론 라우팅. **back-route**: fail + 예산 잔여 시 narrative revise 재진입 —
-    QA findings 를 피드백으로 scenario 재작성(faithfulness 재게이트) 후 spec 의
-    **description 만** 패치해 4 리뷰어 재리뷰. synthesis/verification/suite 는
+    suite_assembler 에서 ``qa_kinds`` 리뷰어로 직접 fan-out(같은 superstep) → 각자
+    partial dict 로 ``qa_reviews`` reducer 에 누적 → aggregator fan-in 집계(kind 별
+    최신) → 결정론 라우팅. **back-route**: fail + 예산 잔여 시 narrative revise 재진입
+    — QA findings 를 피드백으로 scenario 재작성(faithfulness 재게이트) 후 spec 의
+    **description 만** 패치해 리뷰어 재리뷰. synthesis/verification/suite 는
     재실행하지 않는다 (io_contract·골든·채점셋이 진실원천, 지문을 고치는 방향).
     """
-    kinds: tuple[QAReviewerKind, ...] = (
-        "ambiguity",
-        "fairness",
-        "leakage",
-        "difficulty",
-    )
-    for kind in kinds:
+    for kind in qa_kinds:
         llm = qa_reviewer_llms.get(kind) if qa_reviewer_llms is not None else None
         builder.add_node(
             f"qa_{kind}", cast(Any, make_qa_reviewer_node(llm, kind=kind))
@@ -544,5 +558,5 @@ def _wire_qa(
         ),
     )
     builder.add_edge("regen_revise", "narrative_revise")
-    for kind in kinds:
+    for kind in qa_kinds:
         builder.add_edge("spec_patch", f"qa_{kind}")  # 재리뷰 fan-out

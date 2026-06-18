@@ -6,7 +6,7 @@ verification 통과 후 generator_designer → input_generator → suite_assembl
 2. verification fail: suite 노드 미진입 (test_suite/generator_contract None).
 3. partial drop: golden 이 일부 입력 실행 실패 → 그 케이스만 drop, 나머지로 assembled
    (assembled/planned 비율 = 규약 정합 anchor 의 분자/분모 보존 확인).
-4. build guard: with_test_suite=True 는 with_synthesis=True 필수.
+4. build guard: synthesis 항상 배선(Phase 4) — with_test_suite 만으로도 golden 필수.
 """
 
 from __future__ import annotations
@@ -195,7 +195,6 @@ def _suite_graph(
         formalizer_llm=_FixedFormalizerLLM(),
         narrative_llm=_FixedNarrativeLLM(),
         faithfulness_llm=_FaithfulLLM(),
-        with_synthesis=True,
         spec_bridge_llm=_SpecBridgeLLM(spec_prefix),
         designer_llm=_DesignerLLM(),
         golden_llms=[_CoderLLM("# G0"), _CoderLLM("# G1")],
@@ -293,6 +292,8 @@ def test_suite_partial_drop_keeps_rest() -> None:
 # ---------- 4. build guard ----------
 
 
-def test_with_test_suite_requires_synthesis() -> None:
-    with pytest.raises(ValueError, match="with_test_suite"):
+def test_test_suite_still_requires_golden() -> None:
+    # synthesis 항상 배선(Phase 4) — with_test_suite 만으로도 golden/brute 필수
+    # (suite→synthesis 체인이 golden 을 요구. 옛 with_test_suite⇒with_synthesis 가드 대체).
+    with pytest.raises(ValueError, match="golden_llms"):
         build_v2_graph(with_test_suite=True)

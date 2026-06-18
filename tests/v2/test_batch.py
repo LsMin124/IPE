@@ -195,7 +195,7 @@ def test_batch_writes_contract_package_file_and_summary(tmp_path: Path) -> None:
     assert data["final_status"] == "success"
     assert data["batch"]["seed"] == "dijkstra"
     assert data["batch"]["run_index"] == 1
-    assert data["batch"]["mode"] == "hidden"
+    assert data["batch"]["mode"] == "p2"
     assert data["composition"] == ["union_find"]
     pkg = data["package"]
     assert pkg["problem"]["title"] == "상수도 배관망 점검"
@@ -522,7 +522,7 @@ def test_max_cost_usd_stops_remaining_runs(
                 "seed": task.seed.value,
                 "run_index": task.run_index,
                 "run_id": "x",
-                "mode": "hidden",
+                "mode": "p2",
                 "started_at": "t",
                 "elapsed_s": 1.0,
             },
@@ -608,14 +608,14 @@ def test_db_url_persists_completed_runs(
                     ],
                     "origin": "claude-opus-4-8",
                 },
-                "meta": {"mode": "hidden", "timing": {"max_golden_elapsed_ms": 50}},
+                "meta": {"mode": "p2", "timing": {"max_golden_elapsed_ms": 50}},
             },
             "cost_usd": 0.4,
             "batch": {
                 "seed": task.seed.value,
                 "run_index": task.run_index,
                 "run_id": f"{task.seed.value}-r{task.run_index}",
-                "mode": "hidden",
+                "mode": "p2",
                 "started_at": "t",
                 "elapsed_s": 1.0,
             },

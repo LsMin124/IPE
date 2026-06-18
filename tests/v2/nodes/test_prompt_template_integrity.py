@@ -15,8 +15,8 @@ import importlib
 import pytest
 from langchain_core.prompts import ChatPromptTemplate
 
+# strategist 는 composition_mode 별 함수(_system_prompt) — 아래 전용 테스트로 분리.
 _PROMPT_MODULES = [
-    "ipe.v2.nodes.strategist",
     "ipe.v2.nodes.formalizer",
     "ipe.v2.nodes.narrative",
     "ipe.v2.nodes.faithfulness",
@@ -36,6 +36,21 @@ def test_system_prompt_has_no_stray_template_variables(module_name: str) -> None
     assert set(template.input_variables) == {"user"}, sorted(
         template.input_variables
     )
+
+
+def test_strategist_system_prompt_has_no_stray_template_variables() -> None:
+    """strategist 는 composition_mode 별 함수 — single/composed 양 prompt 모두
+    {'user'} 외 변수가 없어야 한다 (f-string 치환 후 literal 중괄호 잔존 차단)."""
+    from ipe.v2.nodes.strategist import _system_prompt
+
+    for mode in ("single", "composed"):
+        template = ChatPromptTemplate.from_messages(
+            [("system", _system_prompt(mode)), ("user", "{user}")]  # type: ignore[arg-type]
+        )
+        assert set(template.input_variables) == {"user"}, (
+            mode,
+            sorted(template.input_variables),
+        )
 
 
 def test_coder_parse_discipline_prompt_has_no_stray_variables() -> None:

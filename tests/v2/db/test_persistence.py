@@ -58,7 +58,7 @@ def _body(
             },
             "meta": {
                 "package_version": "1.0",
-                "mode": "hidden",
+                "mode": "p2",
                 "hidden_algorithm": "dijkstra",
                 "timing": {"max_golden_elapsed_ms": 40},
             },
@@ -72,7 +72,7 @@ def _body(
             "seed": "dijkstra",
             "run_index": 1,
             "run_id": run_id,
-            "mode": "hidden",
+            "mode": "p2",
             "elapsed_s": 120.0,
         },
     }

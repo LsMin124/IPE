@@ -52,11 +52,15 @@ _PACKAGED_STATUSES = ("success", "fail_qa")
 
 
 class GenerateRequest(BaseModel):
-    """계약 §2.1 요청 본문."""
+    """계약 §2.1 요청 본문.
+
+    ``mode`` (Phase 4 — P1/P2 수렴): ``"p1"``=단일·공개·QA 3종 / ``"p2"``=합성·은닉·
+    QA 4종. 모드 노브(hidden/composition_mode/qa_kinds)는 ``config.mode_knobs`` 가 결정.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    mode: Literal["hidden", "direct"]
+    mode: Literal["p1", "p2"]
     seed_algorithm: TargetAlgorithm
     with_qa: bool = True
     max_qa_routebacks: int = Field(default=1, ge=0)
@@ -79,14 +83,16 @@ class _Job:
 
 
 def _production_graph_factory(req: GenerateRequest) -> Any:
-    """CLI 와 동일 모델 구성의 full 그래프 (synthesis+suite[+qa])."""
+    """CLI 와 동일 모델 구성의 full 그래프. 모드 노브(hidden/composition/qa_kinds)는
+    ``config.mode_knobs`` (P1=단일·공개·QA3 / P2=합성·은닉·QA4)."""
     from ipe.v1.nodes import AnthropicCoderLLM
 
     from .graph import build_v2_graph
 
+    hidden, composition_mode, qa_kinds = config.mode_knobs(req.mode)
     return build_v2_graph(
-        hidden=req.mode == "hidden",
-        with_synthesis=True,
+        hidden=hidden,
+        composition_mode=composition_mode,
         golden_llms=[
             AnthropicCoderLLM(m, parse_discipline=True) for m in _GOLDEN_MODELS
         ],
@@ -94,6 +100,7 @@ def _production_graph_factory(req: GenerateRequest) -> Any:
         golden_origins=_GOLDEN_MODELS,
         with_test_suite=True,
         with_qa=req.with_qa,
+        qa_kinds=qa_kinds,
     )
 
 

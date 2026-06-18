@@ -12,6 +12,41 @@ alias 로 유지해 기존 import 경로를 보존한다.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from ipe.v1.schema import QAReviewerKind
+
+# --------------------------------------------------------------------------- #
+# Phase 4 — P1/P2 생성 파이프라인 모드 (정확히 2개로 수렴)                        #
+#   P1: 타겟 고정·단일(합성X)·공개(비은닉)·QA 3종(leakage 제외 — 타겟 공개라      #
+#       유명문제 동형 게이트 부적합).                                            #
+#   P2: 타겟 힌트·2+ 합성·은닉·QA 4종(leakage 포함).                             #
+# --------------------------------------------------------------------------- #
+PipelineMode = Literal["p1", "p2"]
+
+QA_KINDS_P1: tuple[QAReviewerKind, ...] = ("ambiguity", "fairness", "difficulty")
+QA_KINDS_P2: tuple[QAReviewerKind, ...] = (
+    "ambiguity",
+    "fairness",
+    "leakage",
+    "difficulty",
+)
+
+
+def mode_knobs(
+    mode: PipelineMode,
+) -> tuple[bool, Literal["single", "composed"], tuple[QAReviewerKind, ...]]:
+    """모드 → (hidden, composition_mode, qa_kinds).
+
+    P1=공개(hidden False)·단일(single)·QA 3종 / P2=은닉(True)·합성(composed)·4종.
+    한 곳에서 선언해 main_v2/api/batch 가 동일 노브를 쓰게 한다 (drift 차단).
+    """
+    if mode == "p1":
+        return (False, "single", QA_KINDS_P1)
+    return (True, "composed", QA_KINDS_P2)
+
+
 # --------------------------------------------------------------------------- #
 # 모델명 (golden / brute) — 교체 시 여기 한 곳만                                  #
 # --------------------------------------------------------------------------- #

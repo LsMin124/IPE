@@ -62,7 +62,6 @@ def test_v2_suite_pipeline_single_run_real_llm() -> None:
     """
     graph = build_v2_graph(
         hidden=True,
-        with_synthesis=True,
         golden_llms=[
             AnthropicCoderLLM(m, parse_discipline=True) for m in _GOLDEN_MODELS
         ],

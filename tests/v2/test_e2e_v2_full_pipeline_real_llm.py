@@ -5,8 +5,8 @@ ANTHROPIC_API_KEY env 필요. 1 run ≈ strategist + formalizer + narrative +
 faithfulness(모델링 4) + spec_bridge + designer + golden×2 + brute(synthesis 5) =
 approx 9 LLM call + sandbox, cost approx $2-3 (재생성 시 +2/회).
 
-Gate 의도(모델링 e2e 의 확장): **with_synthesis=True 그래프가 실 LLM 통합 경로에서
-crash 없이 end 까지 도달** + valid final_status 종료 + 단계별 아티팩트 populate.
+Gate 의도: **synthesis 포함 그래프가 실 LLM 통합 경로에서 crash 없이 end 까지
+도달** + valid final_status 종료 + 단계별 아티팩트 populate.
 verification pass 여부는 **측정 대상(출하가능률 anchor)** 이지 gate 아님 — 1 run 은
 파이프라인 배선 검증, 출하가능률(verification pass율)의 통계적 anchor 는 N>=3 follow-up.
 
@@ -51,8 +51,8 @@ def test_v2_full_pipeline_single_run_real_llm() -> None:
     """1 run Dijkstra seed, hidden + synthesis — modeling+synthesis 실통합.
 
     검증(gate):
-    - ``build_v2_graph(with_synthesis=True)`` + invoke 가 실 LLM 통합 path(모델링
-      4-LLM + spec_bridge + designer + golden×2/brute + sandbox)에서 crash 없이 동작.
+    - ``build_v2_graph`` + invoke 가 실 LLM 통합 path(모델링 4-LLM + spec_bridge +
+      designer + golden×2/brute + sandbox)에서 crash 없이 동작.
     - 모델링 아티팩트(strategy/blueprint/narrative/faithfulness) populate.
     - faithful 통과 시 synthesis 진입 — spec carry-over(target_algorithm=reduction_core),
       candidates fan-out(golden×2 + brute = 3, dedup reducer), reconciliation populate.
@@ -64,7 +64,6 @@ def test_v2_full_pipeline_single_run_real_llm() -> None:
     """
     graph = build_v2_graph(
         hidden=True,
-        with_synthesis=True,
         golden_llms=[
             AnthropicCoderLLM(m, parse_discipline=True) for m in _GOLDEN_MODELS
         ],

@@ -1,23 +1,22 @@
-"""IPE v2 CLI — blueprint-first 은닉 모델링 그래프 실행 (Phase 3 M3 + 통합).
+"""IPE v2 CLI — P1/P2 생성 파이프라인 실행 (Phase 4 — 2-모드 수렴).
 
 Usage::
 
-    python -m ipe.v2.main_v2 --algorithm dijkstra
-    python -m ipe.v2.main_v2 --algorithm knapsack --direct --max-iter 4
-    python -m ipe.v2.main_v2 --algorithm dijkstra --with-synthesis
-    python -m ipe.v2.main_v2 --algorithm dijkstra --with-synthesis \
-        --with-test-suite --with-qa
+    python -m ipe.v2.main_v2 --algorithm dijkstra --mode p1
+    python -m ipe.v2.main_v2 --algorithm dijkstra --mode p2 --max-iter 6
 
 env: ``ANTHROPIC_API_KEY`` (production LLM calls).
 
-기본 범위: **모델링 layer** (strategist→formalizer→narrative→faithfulness, 4 호출).
-``--with-synthesis`` 면 faithful 통과 후 **synthesis+verification** 까지 — spec_bridge
-→ designer → golden×K/brute fan-out → reconcile → executor (검증된 정답까지 생성).
-golden 은 distinct 모델로 fan-out(차분 독립성). ``--with-test-suite``(M4) 면 검증
-통과 후 **풀 채점셋**(generator_designer→input_generator→suite_assembler),
-``--with-qa``(M5) 면 채점셋 완성 후 **QA 4관점 게이트**(Haiku×4 병렬)까지 — 스테이지
-의존성은 CLI 가 선검증. observability: stdout 요약(+``--verbose`` 전체). output
-영속화는 미포함(follow-up).
+두 모드 다 **full 파이프라인**(synthesis+verification+풀 채점셋+QA)을 태운다 — 차이는
+모드 노브뿐(``config.mode_knobs``):
+- ``--mode p1`` (단일·공개): composition 빈값·hidden=False·QA 3종(leakage 제외).
+  타겟 알고리즘 고정 공개(토픽 드릴).
+- ``--mode p2`` (합성·은닉, 기본): composition≥1·hidden=True·QA 4종. 타겟은 힌트(은닉).
+
+흐름: strategist→formalizer→narrative→faithfulness → spec_bridge → designer →
+golden×K/brute fan-out → reconcile → executor → 풀 채점셋 → QA 게이트. golden 은
+distinct 모델로 fan-out(차분 독립성). observability: stdout 요약(+``--verbose`` 전체).
+output 영속화는 미포함(API/batch 경로가 담당).
 
 exit code: 0 on ``success``, 1 on any ``fail_*``.
 """
@@ -89,43 +88,26 @@ def _build_parser() -> argparse.ArgumentParser:
         help=f"narrative 재생성 budget (default: {DEFAULT_MAX_ITERATIONS})",
     )
     parser.add_argument(
-        "--direct",
-        action="store_true",
-        help="직접(B2C) 렌더 — 알고리즘 명시 (default: 은닉 B2B)",
+        "--mode",
+        choices=["p1", "p2"],
+        default="p2",
+        help="생성 모드 (p1=단일·공개·QA3 / p2=합성·은닉·QA4, default: p2)",
     )
     parser.add_argument(
         "--verbose", action="store_true", help="blueprint/narrative 전체 출력"
     )
     parser.add_argument(
-        "--with-synthesis",
-        action="store_true",
-        help="faithful 후 synthesis+verification 까지 (검증된 정답 생성, 비용↑)",
-    )
-    parser.add_argument(
         "--golden-models",
         default=DEFAULT_GOLDEN_MODELS,
         help=(
-            "golden fan-out 모델 (comma-separated, distinct 권장). "
-            f"--with-synthesis 시만 (default: {DEFAULT_GOLDEN_MODELS})"
+            "golden fan-out 모델 (comma-separated, distinct 권장, "
+            f"default: {DEFAULT_GOLDEN_MODELS})"
         ),
     )
     parser.add_argument(
         "--brute-model",
         default=DEFAULT_BRUTE_MODEL,
-        help=(
-            "brute(naive) coder 모델. --with-synthesis 시만 "
-            f"(default: {DEFAULT_BRUTE_MODEL})"
-        ),
-    )
-    parser.add_argument(
-        "--with-test-suite",
-        action="store_true",
-        help="검증 통과 후 풀 채점셋 생성까지 (--with-synthesis 필요, 비용↑)",
-    )
-    parser.add_argument(
-        "--with-qa",
-        action="store_true",
-        help="채점셋 완성 후 QA 4관점 게이트까지 (--with-test-suite 필요, Haiku×4)",
+        help=f"brute(naive) coder 모델 (default: {DEFAULT_BRUTE_MODEL})",
     )
     return parser
 
@@ -228,28 +210,29 @@ def _normalize_final_state(raw: object) -> V2State:
     return V2State.model_validate(raw)
 
 
-def _build_default_graph(args: argparse.Namespace, *, hidden: bool) -> Any:
-    """production 그래프 build. ``--with-synthesis`` 면 golden/brute coder LLM 배선.
+def _build_default_graph(args: argparse.Namespace) -> Any:
+    """production full 그래프 build (synthesis+suite+qa 항상). 모드 노브는 config.
 
     golden 은 ``--golden-models`` (comma-separated, distinct 권장) 각각을 fan-out 단위로,
-    brute 는 ``--brute-model`` 1개. origin 라벨 = 모델명(차분 독립성 추적).
+    brute 는 ``--brute-model`` 1개. origin 라벨 = 모델명(차분 독립성 추적). hidden/
+    composition_mode/qa_kinds 는 ``--mode`` 가 ``config.mode_knobs`` 로 결정.
     """
-    if not args.with_synthesis:
-        return build_v2_graph(hidden=hidden)
     golden_models = [m.strip() for m in args.golden_models.split(",") if m.strip()]
     if not golden_models:
         raise SystemExit("--golden-models 는 최소 1개 모델 필요")
+    hidden, composition_mode, qa_kinds = config.mode_knobs(args.mode)
     return build_v2_graph(
         hidden=hidden,
-        with_synthesis=True,
+        composition_mode=composition_mode,
         golden_llms=[
             AnthropicCoderLLM(m, parse_discipline=True) for m in golden_models
         ],
         brute_llm=AnthropicCoderLLM(args.brute_model, parse_discipline=True),
         golden_origins=golden_models,
+        with_test_suite=True,
+        with_qa=True,
+        qa_kinds=qa_kinds,
         # suite/qa 노드 LLM 은 None → graph 의 production default(Opus/Haiku) 배선
-        with_test_suite=args.with_test_suite,
-        with_qa=args.with_qa,
     )
 
 
@@ -257,36 +240,25 @@ def main(argv: Sequence[str] | None = None, *, graph: Any = None) -> int:
     """CLI entrypoint. ``graph`` 주입 시 build 생략(test 결정론). exit 0=success."""
     load_dotenv()
     args = _build_parser().parse_args(argv)
-    # 스테이지 의존성은 graph 빌드 전에 검증 (graph 주입 경로 포함) — build_v2_graph
-    # 의 ValueError 가드와 동일 규칙의 CLI 선반영.
-    if args.with_test_suite and not args.with_synthesis:
-        raise SystemExit(
-            "--with-test-suite 는 --with-synthesis 필요 (verified golden 이 expected 를 채움)"
-        )
-    if args.with_qa and not args.with_test_suite:
-        raise SystemExit("--with-qa 는 --with-test-suite 필요 (완성 패키지를 검토)")
 
     run_id = args.run_id or f"v2-{uuid.uuid4().hex[:8]}"
-    hidden = not args.direct
+    hidden, composition_mode, qa_kinds = config.mode_knobs(args.mode)
     initial = initial_v2_state(run_id, args.algorithm, max_iterations=args.max_iter)
 
     print(
-        f"[v2] start run_id={run_id} seed={args.algorithm.value} "
-        f"hidden={hidden} max_iter={args.max_iter} "
-        f"with_synthesis={args.with_synthesis} "
-        f"with_test_suite={args.with_test_suite} with_qa={args.with_qa}"
+        f"[v2] start run_id={run_id} seed={args.algorithm.value} mode={args.mode} "
+        f"hidden={hidden} composition={composition_mode} "
+        f"qa_kinds={list(qa_kinds)} max_iter={args.max_iter}"
     )
 
-    resolved = (
-        graph if graph is not None else _build_default_graph(args, hidden=hidden)
+    resolved = graph if graph is not None else _build_default_graph(args)
+    # 두 모드 다 full 파이프라인 — 전 스테이지 pad 합산(고정).
+    pad = (
+        _RECURSION_PAD
+        + _SYNTHESIS_RECURSION_PAD
+        + _SUITE_RECURSION_PAD
+        + _QA_RECURSION_PAD
     )
-    pad = _RECURSION_PAD
-    if args.with_synthesis:
-        pad += _SYNTHESIS_RECURSION_PAD
-    if args.with_test_suite:
-        pad += _SUITE_RECURSION_PAD
-    if args.with_qa:
-        pad += _QA_RECURSION_PAD
     raw = resolved.invoke(
         initial, config={"recursion_limit": 3 * args.max_iter + pad}
     )

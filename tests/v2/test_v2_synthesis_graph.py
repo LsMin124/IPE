@@ -1,4 +1,4 @@
-"""v2 full 파이프라인 통합테스트 — with_synthesis=True (Phase 3 통합 step2b).
+"""v2 full 파이프라인 통합테스트 (Phase 3 통합 step2b — synthesis 항상 배선).
 
 modeling(strategist→formalizer→narrative→faithfulness) → spec_bridge → designer →
 golden/brute fan-out → reconcile → synth_bridge → executor 까지 mock LLM + scripted
@@ -6,7 +6,7 @@ runner 로 end-to-end 검증:
 1. success: faithful + golden×2/brute 합의 + executor pass → end_success, 전 아티팩트 populate.
 2. synthesis rejected: golden 불일치 → end_synthesis_rejected.
 3. verification fail: 합의했으나 canonical 이 sample mismatch → end_verification.
-4. build guard: with_synthesis=True + golden_llms 누락 → 거부.
+4. build guard: golden_llms 누락 → 거부 (synthesis 항상 배선이라 golden 필수).
 """
 
 from __future__ import annotations
@@ -157,7 +157,6 @@ def _full_graph(
         formalizer_llm=_FixedFormalizerLLM(),
         narrative_llm=_FixedNarrativeLLM(),
         faithfulness_llm=_FaithfulLLM(),
-        with_synthesis=True,
         spec_bridge_llm=(
             spec_bridge_llm
             if spec_bridge_llm is not None
@@ -252,9 +251,9 @@ def test_full_pipeline_verification_fail() -> None:
 # ---------- 4. build guard ----------
 
 
-def test_with_synthesis_requires_golden_and_brute() -> None:
+def test_synthesis_requires_golden_and_brute() -> None:
     with pytest.raises(ValueError, match="golden_llms"):
-        build_v2_graph(with_synthesis=True, brute_llm=_CoderLLM("# B"))
+        build_v2_graph(brute_llm=_CoderLLM("# B"))
 
 
 # ---------- 5. M6 step1: 합성 → symbolic 미적용 (Tier B 검증 정책) ----------

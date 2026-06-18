@@ -1,7 +1,9 @@
-"""v2 CLI(main_v2) 단위 테스트 (Phase 3 M3 follow-up).
+"""v2 CLI(main_v2) 단위 테스트 (Phase 4 — P1/P2 2-모드 수렴).
 
-mock LLM 으로 build_v2_graph 한 그래프를 main(graph=...) 에 주입 → 실 LLM/네트워크
-없이 CLI plumbing(arg parse / summary / exit code) 결정론 검증.
+mock LLM 으로 build_v2_graph 한 **full 파이프라인** 그래프를 main(graph=...) 에 주입 →
+실 LLM/네트워크 없이 CLI plumbing(--mode 파싱 / summary / exit code) 결정론 검증.
+그래프 주입 경로라 모드 노브(hidden/composition/qa_kinds)는 print·pad 만 좌우한다
+(실 노브 배선은 graph/strategist 레벨 테스트가 담당).
 """
 
 from __future__ import annotations
@@ -36,6 +38,12 @@ from ipe.v1.schema import (
 )
 from ipe.v2.graph import build_v2_graph
 from ipe.v2.main_v2 import main
+
+_SYNTH_INPUTS = ["i0", "i1", "i2"]
+_ALL_QA_KINDS: tuple[QAReviewerKind, ...] = get_args(QAReviewerKind)
+
+
+# ---------- modeling mocks ----------
 
 
 class _FixedStrategistLLM:
@@ -72,23 +80,11 @@ class _ScriptedFaithfulnessLLM:
         )
 
 
-def _mock_graph(*, faithful_seq: list[bool], hidden: bool = True) -> Any:
-    return build_v2_graph(
-        strategist_llm=_FixedStrategistLLM(),
-        formalizer_llm=_FixedFormalizerLLM(),
-        narrative_llm=_FixedNarrativeLLM(),
-        faithfulness_llm=_ScriptedFaithfulnessLLM(faithful_seq),
-        hidden=hidden,
-    )
-
-
-# ---------- synthesis-path mocks (--with-synthesis) ----------
-
-_SYNTH_INPUTS = ["i0", "i1", "i2"]
+# ---------- synthesis / suite / qa mocks ----------
 
 
 class _SpecBridgeLLM:
-    """expected = f'ans-{input}' 인 spec 저작 — _by_marker runner 와 일치."""
+    """expected = f'ans-{input}' 인 spec 저작 — _MarkerRunner 와 일치."""
 
     def author(self, state: Any) -> ProblemSpec:
         return ProblemSpec(
@@ -135,29 +131,6 @@ class _MarkerRunner:
         )
 
 
-def _mock_full_graph(*, golden_codes: list[str]) -> Any:
-    """faithful 통과 + golden fan-out + executor 까지 mock 한 full-synthesis 그래프."""
-    return build_v2_graph(
-        strategist_llm=_FixedStrategistLLM(),
-        formalizer_llm=_FixedFormalizerLLM(),
-        narrative_llm=_FixedNarrativeLLM(),
-        faithfulness_llm=_ScriptedFaithfulnessLLM([True]),
-        with_synthesis=True,
-        spec_bridge_llm=_SpecBridgeLLM(),
-        designer_llm=_DesignerLLM(),
-        golden_llms=[_CoderLLM(c) for c in golden_codes],
-        brute_llm=_CoderLLM("# B"),
-        golden_origins=["opus", "sonnet"],
-        runner=_MarkerRunner(),
-        verifier_getter=lambda _a: None,
-    )
-
-
-# ---------- suite/qa-path mocks (--with-test-suite / --with-qa) ----------
-
-_ALL_QA_KINDS: tuple[QAReviewerKind, ...] = get_args(QAReviewerKind)
-
-
 class _FixedGeneratorDesignerLLM:
     def design(self, state: Any) -> GeneratorContract:
         return GeneratorContract(
@@ -184,8 +157,13 @@ class _QAReviewerLLM:
         return QAReview(kind=self._kind, passed=self._passed, rationale="scripted")
 
 
-def _mock_qa_graph(*, fail_kinds: tuple[QAReviewerKind, ...] = ()) -> Any:
-    """검증 통과 + 채점셋 + QA 4종까지 전부 mock 한 full-stage 그래프."""
+def _full_graph(
+    *,
+    faithful_seq: list[bool] | None = None,
+    fail_kinds: tuple[QAReviewerKind, ...] = (),
+    golden_codes: list[str] | None = None,
+) -> Any:
+    """full 파이프라인(modeling+synthesis+suite+qa) mock 그래프 — CLI plumbing 검증용."""
     qa_llms: dict[QAReviewerKind, Any] = {
         kind: _QAReviewerLLM(kind not in fail_kinds, kind) for kind in _ALL_QA_KINDS
     }
@@ -193,11 +171,10 @@ def _mock_qa_graph(*, fail_kinds: tuple[QAReviewerKind, ...] = ()) -> Any:
         strategist_llm=_FixedStrategistLLM(),
         formalizer_llm=_FixedFormalizerLLM(),
         narrative_llm=_FixedNarrativeLLM(),
-        faithfulness_llm=_ScriptedFaithfulnessLLM([True]),
-        with_synthesis=True,
+        faithfulness_llm=_ScriptedFaithfulnessLLM(faithful_seq or [True]),
         spec_bridge_llm=_SpecBridgeLLM(),
         designer_llm=_DesignerLLM(),
-        golden_llms=[_CoderLLM("# G0"), _CoderLLM("# G1")],
+        golden_llms=[_CoderLLM(c) for c in (golden_codes or ["# G0", "# G1"])],
         brute_llm=_CoderLLM("# B"),
         golden_origins=["opus", "sonnet"],
         runner=_MarkerRunner(),
@@ -209,153 +186,106 @@ def _mock_qa_graph(*, fail_kinds: tuple[QAReviewerKind, ...] = ()) -> Any:
     )
 
 
-def test_main_success_returns_zero_and_prints_summary(
+# ---------- success: p2 (기본) full 파이프라인 ----------
+
+
+def test_main_p2_success_prints_full_summary(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    code = main(["--algorithm", "dijkstra", "--mode", "p2"], graph=_full_graph())
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "mode=p2" in out
+    assert "hidden=True" in out
+    assert "composition=composed" in out
+    assert "final_status=success" in out
+    assert "reduction_core=dijkstra" in out
+    # synthesis/suite/qa 요약 노출
+    assert "target_algorithm=dijkstra" in out
+    assert "candidates: 3" in out  # golden×2 + brute
+    assert "test_suite:" in out
+    assert "qa: overall_pass=True" in out
+
+
+# ---------- p1 모드: 단일·공개 노브가 print 에 반영 ----------
+
+
+def test_main_p1_mode_prints_single_public(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    code = main(["--algorithm", "dijkstra", "--mode", "p1"], graph=_full_graph())
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "mode=p1" in out
+    assert "hidden=False" in out  # P1 = 공개
+    assert "composition=single" in out
+    # P1 qa_kinds 는 leakage 제외 3종
+    assert "qa_kinds=['ambiguity', 'fairness', 'difficulty']" in out
+
+
+def test_main_default_mode_is_p2(capsys: pytest.CaptureFixture[str]) -> None:
+    code = main(["--algorithm", "dijkstra"], graph=_full_graph())
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "mode=p2" in out
+
+
+# ---------- 실패 경로 ----------
+
+
+def test_main_faithfulness_failure_returns_one(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     code = main(
-        ["--algorithm", "dijkstra"], graph=_mock_graph(faithful_seq=[True])
-    )
-    out = capsys.readouterr().out
-    assert code == 0
-    assert "final_status=success" in out
-    assert "reduction_core=dijkstra" in out
-    assert "faithful=True" in out
-
-
-def test_main_failure_returns_one(capsys: pytest.CaptureFixture[str]) -> None:
-    code = main(
-        ["--algorithm", "dijkstra", "--max-iter", "2"],
-        graph=_mock_graph(faithful_seq=[False]),
+        ["--algorithm", "dijkstra", "--mode", "p2", "--max-iter", "2"],
+        graph=_full_graph(faithful_seq=[False]),
     )
     out = capsys.readouterr().out
     assert code == 1
     assert "final_status=fail_faithfulness" in out
 
 
-def test_main_verbose_prints_scenario(capsys: pytest.CaptureFixture[str]) -> None:
-    main(
-        ["--algorithm", "dijkstra", "--verbose"],
-        graph=_mock_graph(faithful_seq=[True]),
-    )
-    out = capsys.readouterr().out
-    assert "VERBOSE" in out
-    assert "물류 시나리오 지문" in out
-
-
-def test_main_direct_flag_accepted(capsys: pytest.CaptureFixture[str]) -> None:
-    code = main(
-        ["--algorithm", "dijkstra", "--direct"],
-        graph=_mock_graph(faithful_seq=[True]),
-    )
-    assert code == 0
-    assert "hidden=False" in capsys.readouterr().out
-
-
-def test_main_unsupported_algorithm_exits() -> None:
-    with pytest.raises(SystemExit):
-        main(["--algorithm", "no_such_algo"], graph=_mock_graph(faithful_seq=[True]))
-
-
-def test_main_with_synthesis_success_prints_synthesis_summary(
+def test_main_synthesis_rejected_returns_one(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """--with-synthesis: golden 합의 + executor pass → exit 0 + synthesis 요약."""
+    """golden 불일치 → exit 1 + fail_synthesis_rejected (증거 ref/cand 출력 노출)."""
     code = main(
-        ["--algorithm", "dijkstra", "--with-synthesis"],
-        graph=_mock_full_graph(golden_codes=["# G0", "# G1"]),
-    )
-    out = capsys.readouterr().out
-    assert code == 0
-    assert "final_status=success" in out
-    # synthesis 아티팩트 요약 노출
-    assert "spec:" in out
-    assert "target_algorithm=dijkstra" in out
-    assert "candidates: 3" in out  # golden×2 + brute, dedup reducer
-    assert "all_agree=True" in out
-    assert "adopted_origin=opus" in out  # reference golden_0
-    assert "overall_pass=True" in out
-
-
-def test_main_with_synthesis_rejected_returns_one(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """--with-synthesis: golden 불일치 → exit 1 + fail_synthesis_rejected."""
-    code = main(
-        ["--algorithm", "dijkstra", "--with-synthesis"],
-        graph=_mock_full_graph(golden_codes=["# G0", "# WRONG G1"]),
+        ["--algorithm", "dijkstra"],
+        graph=_full_graph(golden_codes=["# G0", "# WRONG G1"]),
     )
     out = capsys.readouterr().out
     assert code == 1
     assert "final_status=fail_synthesis_rejected" in out
     assert "all_agree=False" in out
-    # reject 원인 가시화 — disagreement 케이스 증거(ref/cand 출력)가 요약에 노출.
-    # 샘플 input 은 io_schema 에서 결정적 생성되므로(A) 값 고정 없이 ref/cand 출력
-    # prefix 로 증거 노출만 확인 (mock golden=ans-<in>, cand=wrong-<in>).
     assert "ans-" in out
     assert "wrong-" in out
 
 
-def test_main_with_test_suite_requires_synthesis() -> None:
-    """--with-test-suite 는 --with-synthesis 없이 불가 (graph 가드의 CLI 선반영)."""
-    with pytest.raises(SystemExit, match="with-synthesis"):
-        main(
-            ["--algorithm", "dijkstra", "--with-test-suite"],
-            graph=_mock_qa_graph(),
-        )
-
-
-def test_main_with_qa_requires_test_suite() -> None:
-    """--with-qa 는 --with-test-suite 없이 불가."""
-    with pytest.raises(SystemExit, match="with-test-suite"):
-        main(
-            ["--algorithm", "dijkstra", "--with-synthesis", "--with-qa"],
-            graph=_mock_qa_graph(),
-        )
-
-
-def test_main_with_qa_success_prints_suite_and_qa_summary(
+def test_main_qa_failure_returns_one_and_prints_failed_kinds(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """--with-qa 전 스테이지 통과 → exit 0 + 채점셋/QA 요약 노출."""
+    """QA blocker → exit 1 + failed_kinds 가시화 (채점셋은 완성)."""
     code = main(
-        [
-            "--algorithm",
-            "dijkstra",
-            "--with-synthesis",
-            "--with-test-suite",
-            "--with-qa",
-        ],
-        graph=_mock_qa_graph(),
-    )
-    out = capsys.readouterr().out
-    assert code == 0
-    assert "final_status=success" in out
-    # 채점셋 요약: planned(=scale 2 + edge 1) / assembled / 출처
-    assert "test_suite:" in out
-    assert "planned=3" in out
-    assert "assembled=3" in out
-    assert "golden_origin=opus" in out
-    # QA 요약: overall + kind 별 verdict
-    assert "qa: overall_pass=True" in out
-    assert "ambiguity" in out
-
-
-def test_main_with_qa_failure_returns_one_and_prints_failed_kinds(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """QA blocker → exit 1 + failed_kinds 가시화."""
-    code = main(
-        [
-            "--algorithm",
-            "dijkstra",
-            "--with-synthesis",
-            "--with-test-suite",
-            "--with-qa",
-        ],
-        graph=_mock_qa_graph(fail_kinds=("leakage",)),
+        ["--algorithm", "dijkstra"],
+        graph=_full_graph(fail_kinds=("leakage",)),
     )
     out = capsys.readouterr().out
     assert code == 1
     assert "final_status=fail_qa" in out
     assert "qa: overall_pass=False" in out
     assert "failed_kinds=['leakage']" in out
+
+
+# ---------- 부수 plumbing ----------
+
+
+def test_main_verbose_prints_scenario(capsys: pytest.CaptureFixture[str]) -> None:
+    main(["--algorithm", "dijkstra", "--verbose"], graph=_full_graph())
+    out = capsys.readouterr().out
+    assert "VERBOSE" in out
+    assert "물류 시나리오 지문" in out
+
+
+def test_main_unsupported_algorithm_exits() -> None:
+    with pytest.raises(SystemExit):
+        main(["--algorithm", "no_such_algo"], graph=_full_graph())
