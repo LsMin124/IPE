@@ -107,7 +107,7 @@ CREATE TABLE test_cases (
     seq        INTEGER     NOT NULL,                     -- 케이스 순번(0-base)
     input      TEXT        NOT NULL,
     expected   TEXT        NOT NULL,                     -- "" 가능(퇴화 케이스의 정해 출력이 빈값)
-    category   VARCHAR(64) NULL                          -- 'small'/'medium'/'large'/'stress' + 엣지 이름
+    category   VARCHAR(64) NULL                          -- 분포 진단용 tier/edge 이름 (예 'scale:small'). 채점 무관
 );
 CREATE INDEX ix_test_cases_problem_id ON test_cases (problem_id);
 
@@ -165,7 +165,7 @@ FROM problems
 WHERE problem_number = :problem_number AND status = 'published';
 
 -- 응시자에게 줄 문제 본문 (내부 컬럼 제외)
-SELECT id, title, description, input_format, output_format, constraints, samples, time_limit_ms
+SELECT problem_number, id, title, description, input_format, output_format, constraints, samples, time_limit_ms
 FROM problems
 WHERE id = :problem_id;
 

@@ -4,9 +4,9 @@
 > **대상 독자**: 서비스 백엔드(BOJ 유사) 구현 개발자.
 > **변경 절차**: 본 문서가 계약의 단일 진실원천. 필드 추가는 minor(하위호환),
 > 제거/의미 변경은 major + 양측 합의.
-> **⚠ 최근 breaking = v3.0**: 알고리즘 분류가 `problems.algorithm` 스칼라 → `problem_algorithms`
-> N:M 정션(코어+합성 전부, role 구분 — §3.4). (v2.0: `mode` `hidden`/`direct`→`p1`/`p2`.)
-> **v3.1 (additive)**: `problems.problem_number` 공개 검색 번호. 백엔드 미연동이라 단독 반영 — 소비자 없음. 전체 변경이력 §7.
+> **⚠ 미연동 단계 변경(소비자 없음)**: v1.0 이후 ① `mode` `hidden`/`direct`→`p1`/`p2`(v2.0)
+> ② 알고리즘 분류 `problems.algorithm` 스칼라 → `problem_algorithms` N:M 정션(v3.0, §3.4)
+> ③ `problems.problem_number` 공개 검색 번호 추가(v3.1). 상세 변경이력 §7.
 
 ---
 
@@ -247,18 +247,22 @@ two_sum, segtree, fenwick, heap, sieve, string_match
 2. **idempotency_key**: 워커 재시작 대비 요청마다 신규 UUID 발급·저장.
 3. **원본 보관 권장**: 수신한 package 원문(jsonb)을 `generation_requests` 류
    테이블에 보관 — 감사/재검수/재적재 근거.
-4. **DB 최소 스키마 제안**:
-   - `problems(id, problem_number, title, description, input_format, output_format,
-     constraints jsonb, samples jsonb, internal_meta jsonb, status
-     draft|review|published, time_limit_ms, created_at)` — `problem_number`(정수, unique)
-     = 공개 검색·노출 번호(1000~), `id`(UUID)=내부 참조
-   - `test_cases(problem_id, seq, input text, expected text, category)`
-   - `problem_algorithms(problem_id, algorithm, role)` — 문제↔알고리즘 N:M
-     (PK `(problem_id, algorithm)`). `role` = `core`(은닉 코어) | `composition`(합성 기법),
-     둘 다 §2.4 enum 어휘. **알고리즘 분류 필터링**용(특정 기법이 코어든 합성이든 포함된
-     문제 조회). 응시자 비노출. v3.0 에서 구 `problems.algorithm` 스칼라(코어만)를 대체.
-   - `generation_requests(idempotency_key, seed, mode, job_id, final_status,
-     attempts, raw_package jsonb, created_at)`
+
+### 3.4 DB 최소 스키마 (실제 구현 = `ipe/v2/db/schema.py`)
+
+- `problems(id, problem_number, title, description, input_format, output_format,
+  constraints jsonb, samples jsonb, internal_meta jsonb, difficulty, status
+  draft|review|published, time_limit_ms, created_at)` — `problem_number`(정수, unique)
+  = 공개 검색·노출 번호(1000~), `id`(UUID)=내부 참조
+- `test_cases(problem_id, seq, input text, expected text, category)`
+- `problem_algorithms(problem_id, algorithm, role)` — 문제↔알고리즘 N:M
+  (PK `(problem_id, algorithm)`). `role` = `core`(은닉 코어) | `composition`(합성 기법),
+  둘 다 §2.4 enum 어휘. **알고리즘 분류 필터링**용(특정 기법이 코어든 합성이든 포함된
+  문제 조회). 응시자 비노출. v3.0 에서 구 `problems.algorithm` 스칼라(코어만)를 대체.
+- `generation_requests(idempotency_key, seed, mode, job_id, final_status,
+  attempts, raw_package jsonb, created_at)`
+
+> 컬럼 상세(타입·주석·인덱스)와 로컬 접속법은 `db-access-handoff.md` 참조.
 
 ### 3.5 파이프라인 직접 적재 모드 (운영 토폴로지 옵션 — §0 경계 변경)
 
@@ -272,8 +276,7 @@ two_sum, segtree, fenwick, heap, sieve, string_match
   적재(run JSON 파일과 병행). **idempotent**(같은 run_id 재적재 시 중복 문제 생성 없이
   attempts 증가).
 - **스키마 소유 = 파이프라인**(alembic): 배포 시 `IPE_DB_URL=… alembic upgrade head`
-  로 테이블 생성/이행. 위 §3-4 스키마가 실제 구현(`problems`/`test_cases`/
-  `problem_algorithms`/`generation_requests`)이며 SSOT 는 `ipe/v2/db/schema.py`. 서비스 백엔드는 이 테이블을
+  로 §3.4 테이블 생성/이행. 서비스 백엔드는 이 테이블을
   **읽기 전용**으로 소비(특히 `problems.status='draft'` 만, `test_cases` 는 success
   문제만 채점 — §2.5 규약).
 - 매핑: `problems.internal_meta`=패키지 `meta` 전체(내부전용), `solution_code`=정해
@@ -313,15 +316,19 @@ two_sum, segtree, fenwick, heap, sieve, string_match
 
 ---
 
-## 6. 파이프라인 측 구현 상태와 일정
+## 6. 파이프라인 측 구현 상태
 
 | 항목 | 상태 |
 |---|---|
 | 생성 파이프라인 (검증+채점셋+QA+자동회수) | ✅ 완성, 실 LLM success run 보유 |
 | `fail_spec_authoring` 가드 (crash 무발생 보장) | ✅ 머지됨 |
-| API 서버 (본 계약 3 엔드포인트) | 🔨 Slice 1 — 계약 확정 후 즉시 (반나절~1일) |
-| `golden_elapsed_ms` 메타 | 🔨 Slice 1 에 포함 |
-| 컨테이너/배포 | 🔨 Slice 2 (반나절) |
+| API 서버 (본 계약 3 엔드포인트 + `golden_elapsed_ms`) | ✅ 완성 — 컨테이너 실 LLM smoke 성공 |
+| 컨테이너/배포 | ✅ `Dockerfile.api` + 배포 가이드(`pipeline-deploy.md`) |
+| DB 직접 적재 (§3.5, alembic 스키마) | ✅ prod 적용 — `alembic upgrade head`, 현재 head `0005` |
+| 알고리즘 정션 / `problem_number` | ✅ 머지 (v3.0 / v3.1) |
+
+→ **파이프라인 측 연동 준비 완료.** 백엔드는 ① HTTP API(§2) 또는 ② 공유 DB 직접 읽기
+(§3.5 + `db-access-handoff.md`) 중 토폴로지를 택해 연동하면 된다.
 
 ---
 
