@@ -1,12 +1,12 @@
-# IPE 파이프라인 ↔ 서비스 백엔드 API 계약 (v3.0)
+# IPE 파이프라인 ↔ 서비스 백엔드 API 계약 (v3.1)
 
-> **문서 상태**: 확정 — 2026-06-22 (v3.0), 파이프라인 측 작성.
+> **문서 상태**: 확정 — 2026-06-22 (v3.1), 파이프라인 측 작성.
 > **대상 독자**: 서비스 백엔드(BOJ 유사) 구현 개발자.
 > **변경 절차**: 본 문서가 계약의 단일 진실원천. 필드 추가는 minor(하위호환),
 > 제거/의미 변경은 major + 양측 합의.
-> **⚠ v3.0 (breaking)**: 알고리즘 분류가 `problems.algorithm` 스칼라 → `problem_algorithms`
+> **⚠ 최근 breaking = v3.0**: 알고리즘 분류가 `problems.algorithm` 스칼라 → `problem_algorithms`
 > N:M 정션(코어+합성 전부, role 구분 — §3.4). (v2.0: `mode` `hidden`/`direct`→`p1`/`p2`.)
-> 백엔드 미연동 시점이라 양측 합의 없이 반영 — 소비자 없음. 전체 변경이력 §7.
+> **v3.1 (additive)**: `problems.problem_number` 공개 검색 번호. 백엔드 미연동이라 단독 반영 — 소비자 없음. 전체 변경이력 §7.
 
 ---
 
@@ -248,9 +248,10 @@ two_sum, segtree, fenwick, heap, sieve, string_match
 3. **원본 보관 권장**: 수신한 package 원문(jsonb)을 `generation_requests` 류
    테이블에 보관 — 감사/재검수/재적재 근거.
 4. **DB 최소 스키마 제안**:
-   - `problems(id, title, description, input_format, output_format,
+   - `problems(id, problem_number, title, description, input_format, output_format,
      constraints jsonb, samples jsonb, internal_meta jsonb, status
-     draft|review|published, time_limit_ms, created_at)`
+     draft|review|published, time_limit_ms, created_at)` — `problem_number`(정수, unique)
+     = 공개 검색·노출 번호(1000~), `id`(UUID)=내부 참조
    - `test_cases(problem_id, seq, input text, expected text, category)`
    - `problem_algorithms(problem_id, algorithm, role)` — 문제↔알고리즘 N:M
      (PK `(problem_id, algorithm)`). `role` = `core`(은닉 코어) | `composition`(합성 기법),
@@ -328,6 +329,7 @@ two_sum, segtree, fenwick, heap, sieve, string_match
 
 | 버전 | 일자 | 변경 |
 |---|---|---|
+| **v3.1** | 2026-06-22 | **[additive]** `problems.problem_number` 공개 검색 번호(정수 unique, base 1000) 추가 — UUID(`id`)와 별개로 사람이 검색/노출에 쓰는 핸들(BOJ 문제번호 격). 적재 시 파이프라인 채번. 기존 컬럼 불변(하위호환). |
 | **v3.0** | 2026-06-22 | **[breaking]** 알고리즘 분류가 `problems.algorithm` 스칼라(코어 1개) → `problem_algorithms` N:M 정션으로 교체(§3.4). 코어(role `core`) + 합성(role `composition`, §2.1 P2) 전부 행으로 — 백엔드가 합성 기법까지 필터 가능. 패키지(`meta.hidden_algorithm`/`composition`)는 불변, DB 적재 형상만 변경. 백엔드 미연동 시점 반영(소비자 없음). |
 | **v2.0** | 2026-06-22 | **[breaking]** `mode` enum `hidden`/`direct` → `p1`/`p2` (§2.1). 의미 변경=major. `p1`=단일·공개·QA 3종 / `p2`=합성·은닉·QA 4종 — 모드가 합성/은닉/지문/QA관점 4노브를 한 번에 결정. 패키지 `meta.mode`·`meta.composition`·`meta.qa.verdicts` 도 모드에 종속. 백엔드 미연동 시점 반영(기존 v1.0 소비자 없음).<br>**[additive]** `meta.difficulty`(RFC R4 사후 calibration, 옵션 — `--with-difficulty`/`IPE_WITH_DIFFICULTY` 켤 때만) + 직접 적재 DB 의 `problems.algorithm`·`problems.difficulty` 1급 컬럼. 키/컬럼 부재 시 무시 안전(하위호환). |
 | v1.0 | 2026-06-12 | 최초 확정 — 3 엔드포인트(§2), ProblemPackage 스키마(§2.5), 직접 적재 모드(§3.5). |

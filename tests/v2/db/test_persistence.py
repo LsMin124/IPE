@@ -104,6 +104,7 @@ def test_persist_success_maps_all_tables(tmp_path: Path) -> None:
         assert prob["solution_code"] == "print(sum(...))"
         assert prob["solution_language"] == "python"
         assert prob["status"] == "draft"
+        assert prob["problem_number"] == 1000  # 공개 검색 번호 — base 1000 채번
         assert prob["time_limit_ms"] == 1000  # max(1000, 40*3=120)
         assert prob["internal_meta"]["hidden_algorithm"] == "dijkstra"
 
@@ -219,3 +220,20 @@ def test_persist_algorithm_junction_core_only_when_no_composition(
     assert len(rows) == 1
     assert rows[0]["algorithm"] == "dijkstra"
     assert rows[0]["role"] == "core"
+
+
+def test_persist_assigns_incrementing_problem_number(tmp_path: Path) -> None:
+    """공개 검색 번호: 적재 순서대로 1000, 1001, … 증가."""
+    eng = _engine(tmp_path)
+    pid1 = persist_run(eng, _body(run_id="n1"))
+    pid2 = persist_run(eng, _body(run_id="n2"))
+
+    with eng.connect() as c:
+        n1 = c.execute(
+            select(problems.c.problem_number).where(problems.c.id == pid1)
+        ).scalar_one()
+        n2 = c.execute(
+            select(problems.c.problem_number).where(problems.c.id == pid2)
+        ).scalar_one()
+    assert n1 == 1000
+    assert n2 == 1001

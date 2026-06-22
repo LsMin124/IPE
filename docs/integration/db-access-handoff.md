@@ -80,11 +80,12 @@ psql "postgresql://<DB_USER>:<PASSWORD>@127.0.0.1:16380/fly-db"
 ## 3. 스키마 (4 테이블)
 
 파이프라인이 alembic으로 소유/관리한다(`ipe/v2/db/`). 백엔드는 **읽기 전용으로 가정**하고
-DDL을 변경하지 않는다. 현재 적용 버전: `0004_algorithm_junction` (head).
+DDL을 변경하지 않는다. 현재 적용 버전: `0005_problem_number` (head).
 
 ```sql
 CREATE TABLE problems (
-    id                VARCHAR(36) PRIMARY KEY,           -- uuid4 (hex-dash)
+    id                VARCHAR(36) PRIMARY KEY,           -- uuid4 (hex-dash) — 내부 안정 식별
+    problem_number    BIGINT      NOT NULL UNIQUE,       -- 공개 검색 번호(1000~). ✅ 노출 가능 — 사람이 쓰는 핸들(BOJ 문제번호 격), 적재 시 채번
     title             TEXT        NOT NULL,
     description       TEXT        NOT NULL,              -- 응시자에게 보일 지문(은닉 렌더 포함)
     input_format      TEXT        NOT NULL,              -- 입력 형식 명세
@@ -132,6 +133,8 @@ CREATE TABLE generation_requests (                       -- 생성 감사 로그
 ```
 
 ### 핵심 규약
+- **식별자**: `id`(UUID)=내부 안정 참조 / `problem_number`(1000~)=공개 검색·노출용 핸들
+  (적재 시 채번, 영구 불변). 사용자 검색/노출에는 `problem_number` 사용.
 - **응시자 비노출**: `internal_meta`, `solution_code`(+`solution_language`),
   `problem_algorithms` 전체(은닉 코어+합성). 응시자 API로 절대 내보내지 말 것 — 채점/검수
   /내부 필터에서만 사용. `difficulty`(티어 라벨)는 노출 가능하나(백엔드 product 정책)
@@ -149,11 +152,17 @@ CREATE TABLE generation_requests (                       -- 생성 감사 로그
 ## 4. 읽기 쿼리 예시
 
 ```sql
--- 출하 가능(published) 문제 목록
-SELECT id, title, time_limit_ms, created_at
+-- 출하 가능(published) 문제 목록 (공개 번호 포함)
+SELECT problem_number, id, title, time_limit_ms, created_at
 FROM problems
 WHERE status = 'published'
-ORDER BY created_at DESC;
+ORDER BY problem_number;
+
+-- 공개 번호로 문제 조회 (사용자 검색)
+SELECT problem_number, id, title, description, input_format, output_format,
+       constraints, samples, time_limit_ms
+FROM problems
+WHERE problem_number = :problem_number AND status = 'published';
 
 -- 응시자에게 줄 문제 본문 (내부 컬럼 제외)
 SELECT id, title, description, input_format, output_format, constraints, samples, time_limit_ms

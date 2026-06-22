@@ -11,7 +11,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import insert, select, update
+from sqlalchemy import func, insert, select, text, update
 from sqlalchemy.engine import Connection, Engine
 
 from .schema import (
@@ -26,6 +26,11 @@ from .schema import (
 _TL_MULTIPLIER = 3
 _TL_FLOOR_MS = 1000
 
+# problem_number (공개 검색 번호) — 적재 시 채번, base 1000 (BOJ식). PG 는 트랜잭션
+# advisory lock 으로 동시 채번 직렬화(배치 2~3 슬롯), sqlite(테스트)는 단일 writer.
+_PROBLEM_NUMBER_BASE = 1000
+_PROBLEM_NUMBER_LOCK_KEY = 20260622
+
 
 def init_schema(engine: Engine) -> None:
     """테이블이 없으면 생성 (idempotent). 운영은 alembic, 테스트·부트스트랩은 이걸로."""
@@ -38,6 +43,21 @@ def _time_limit_ms(package: dict[str, Any]) -> int | None:
     if max_ms is None:
         return None
     return max(_TL_FLOOR_MS, round(float(max_ms) * _TL_MULTIPLIER))
+
+
+def _next_problem_number(conn: Connection) -> int:
+    """공개 검색 번호 채번 — 현재 최대값+1 (없으면 ``_PROBLEM_NUMBER_BASE``).
+
+    PostgreSQL 은 트랜잭션 advisory lock 으로 동시 채번을 직렬화(배치 2~3 슬롯 충돌 방지).
+    sqlite(단위테스트)는 단일 writer 라 lock 불요. unique 제약이 최종 안전망.
+    """
+    if conn.dialect.name == "postgresql":
+        conn.execute(
+            text("SELECT pg_advisory_xact_lock(:k)"),
+            {"k": _PROBLEM_NUMBER_LOCK_KEY},
+        )
+    current = conn.execute(select(func.max(problems.c.problem_number))).scalar()
+    return int(current) + 1 if current is not None else _PROBLEM_NUMBER_BASE
 
 
 def _insert_problem_algorithms(
@@ -70,9 +90,11 @@ def _insert_problem(conn: Connection, package: dict[str, Any], now: datetime) ->
     solution = package.get("solution") or {}
     meta = package.get("meta") or {}
     problem_id = str(uuid.uuid4())
+    problem_number = _next_problem_number(conn)
     conn.execute(
         insert(problems).values(
             id=problem_id,
+            problem_number=problem_number,
             title=problem.get("title", ""),
             description=problem.get("description", ""),
             input_format=io_contract.get("input_format", ""),
