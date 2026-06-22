@@ -1,11 +1,12 @@
-# IPE 파이프라인 ↔ 서비스 백엔드 API 계약 (v2.0)
+# IPE 파이프라인 ↔ 서비스 백엔드 API 계약 (v3.0)
 
-> **문서 상태**: 확정 — 2026-06-22 (v2.0), 파이프라인 측 작성.
+> **문서 상태**: 확정 — 2026-06-22 (v3.0), 파이프라인 측 작성.
 > **대상 독자**: 서비스 백엔드(BOJ 유사) 구현 개발자.
 > **변경 절차**: 본 문서가 계약의 단일 진실원천. 필드 추가는 minor(하위호환),
 > 제거/의미 변경은 major + 양측 합의.
-> **⚠ v2.0 (breaking)**: `mode` enum 이 `hidden`/`direct` → `p1`/`p2` 로 의미 변경(=major).
-> 백엔드 미연동 시점이라 양측 합의 없이 반영 — 기존 v1.0 소비자 없음. 전체 변경이력 §7.
+> **⚠ v3.0 (breaking)**: 알고리즘 분류가 `problems.algorithm` 스칼라 → `problem_algorithms`
+> N:M 정션(코어+합성 전부, role 구분 — §3.4). (v2.0: `mode` `hidden`/`direct`→`p1`/`p2`.)
+> 백엔드 미연동 시점이라 양측 합의 없이 반영 — 소비자 없음. 전체 변경이력 §7.
 
 ---
 
@@ -205,7 +206,9 @@ two_sum, segtree, fenwick, heap, sieve, string_match
 필드 규약:
 
 - **`meta.hidden_algorithm`/`meta.composition` 은 유저에게 절대 노출 금지**
-  (노출 = 은닉·유출 방지 설계 무력화). DB 내부 컬럼으로만.
+  (노출 = 은닉·유출 방지 설계 무력화). 내부 운영 DB 에서는 알고리즘 분류 필터링용으로
+  `problem_algorithms` 정션(코어=role `core`, 합성=role `composition`)에 적재된다(§3.4) —
+  이 역시 내부 전용.
 - **`solution.golden_code` 은 내부 검수·재현용 정해 — 응시자에게 절대 노출 금지**
   (채점은 `test_suite` 줄 단위 exact-match 라 정해 코드 불요; DB 내부 컬럼·감사용).
   `package_version` 무변경 `1.0` 에 **additive** 로 추가 — 기존 백엔드는 무시해도 안전.
@@ -249,6 +252,10 @@ two_sum, segtree, fenwick, heap, sieve, string_match
      constraints jsonb, samples jsonb, internal_meta jsonb, status
      draft|review|published, time_limit_ms, created_at)`
    - `test_cases(problem_id, seq, input text, expected text, category)`
+   - `problem_algorithms(problem_id, algorithm, role)` — 문제↔알고리즘 N:M
+     (PK `(problem_id, algorithm)`). `role` = `core`(은닉 코어) | `composition`(합성 기법),
+     둘 다 §2.4 enum 어휘. **알고리즘 분류 필터링**용(특정 기법이 코어든 합성이든 포함된
+     문제 조회). 응시자 비노출. v3.0 에서 구 `problems.algorithm` 스칼라(코어만)를 대체.
    - `generation_requests(idempotency_key, seed, mode, job_id, final_status,
      attempts, raw_package jsonb, created_at)`
 
@@ -265,7 +272,7 @@ two_sum, segtree, fenwick, heap, sieve, string_match
   attempts 증가).
 - **스키마 소유 = 파이프라인**(alembic): 배포 시 `IPE_DB_URL=… alembic upgrade head`
   로 테이블 생성/이행. 위 §3-4 스키마가 실제 구현(`problems`/`test_cases`/
-  `generation_requests`)이며 SSOT 는 `ipe/v2/db/schema.py`. 서비스 백엔드는 이 테이블을
+  `problem_algorithms`/`generation_requests`)이며 SSOT 는 `ipe/v2/db/schema.py`. 서비스 백엔드는 이 테이블을
   **읽기 전용**으로 소비(특히 `problems.status='draft'` 만, `test_cases` 는 success
   문제만 채점 — §2.5 규약).
 - 매핑: `problems.internal_meta`=패키지 `meta` 전체(내부전용), `solution_code`=정해
@@ -321,6 +328,7 @@ two_sum, segtree, fenwick, heap, sieve, string_match
 
 | 버전 | 일자 | 변경 |
 |---|---|---|
+| **v3.0** | 2026-06-22 | **[breaking]** 알고리즘 분류가 `problems.algorithm` 스칼라(코어 1개) → `problem_algorithms` N:M 정션으로 교체(§3.4). 코어(role `core`) + 합성(role `composition`, §2.1 P2) 전부 행으로 — 백엔드가 합성 기법까지 필터 가능. 패키지(`meta.hidden_algorithm`/`composition`)는 불변, DB 적재 형상만 변경. 백엔드 미연동 시점 반영(소비자 없음). |
 | **v2.0** | 2026-06-22 | **[breaking]** `mode` enum `hidden`/`direct` → `p1`/`p2` (§2.1). 의미 변경=major. `p1`=단일·공개·QA 3종 / `p2`=합성·은닉·QA 4종 — 모드가 합성/은닉/지문/QA관점 4노브를 한 번에 결정. 패키지 `meta.mode`·`meta.composition`·`meta.qa.verdicts` 도 모드에 종속. 백엔드 미연동 시점 반영(기존 v1.0 소비자 없음).<br>**[additive]** `meta.difficulty`(RFC R4 사후 calibration, 옵션 — `--with-difficulty`/`IPE_WITH_DIFFICULTY` 켤 때만) + 직접 적재 DB 의 `problems.algorithm`·`problems.difficulty` 1급 컬럼. 키/컬럼 부재 시 무시 안전(하위호환). |
 | v1.0 | 2026-06-12 | 최초 확정 — 3 엔드포인트(§2), ProblemPackage 스키마(§2.5), 직접 적재 모드(§3.5). |
 

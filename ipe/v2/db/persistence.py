@@ -14,7 +14,13 @@ from typing import Any
 from sqlalchemy import insert, select, update
 from sqlalchemy.engine import Connection, Engine
 
-from .schema import generation_requests, metadata, problems, test_cases
+from .schema import (
+    generation_requests,
+    metadata,
+    problem_algorithms,
+    problems,
+    test_cases,
+)
 
 # TL 산정 (계약 §4): time_limit_ms = max(하한, max_golden_elapsed_ms × 배수).
 _TL_MULTIPLIER = 3
@@ -34,10 +40,35 @@ def _time_limit_ms(package: dict[str, Any]) -> int | None:
     return max(_TL_FLOOR_MS, round(float(max_ms) * _TL_MULTIPLIER))
 
 
+def _insert_problem_algorithms(
+    conn: Connection, problem_id: str, meta: dict[str, Any]
+) -> None:
+    """알고리즘 분류 N:M 적재 — 코어(role='core') + 합성(role='composition').
+
+    둘 다 ``internal_meta`` 출처(hidden_algorithm / composition, TargetAlgorithm 어휘).
+    코어가 합성에도 들어가 있으면 중복 PK 회피로 코어 우선 1회만.
+    """
+    rows: list[dict[str, str]] = []
+    seen: set[str] = set()
+    core = meta.get("hidden_algorithm")
+    if core:
+        rows.append({"problem_id": problem_id, "algorithm": core, "role": "core"})
+        seen.add(core)
+    for tech in meta.get("composition") or []:
+        if tech and tech not in seen:
+            rows.append(
+                {"problem_id": problem_id, "algorithm": tech, "role": "composition"}
+            )
+            seen.add(tech)
+    if rows:
+        conn.execute(insert(problem_algorithms), rows)
+
+
 def _insert_problem(conn: Connection, package: dict[str, Any], now: datetime) -> str:
     problem = package["problem"]
     io_contract = problem.get("io_contract") or {}
     solution = package.get("solution") or {}
+    meta = package.get("meta") or {}
     problem_id = str(uuid.uuid4())
     conn.execute(
         insert(problems).values(
@@ -48,12 +79,9 @@ def _insert_problem(conn: Connection, package: dict[str, Any], now: datetime) ->
             output_format=io_contract.get("output_format", ""),
             constraints=problem.get("constraints", []),
             samples=problem.get("sample_testcases", []),
-            internal_meta=package.get("meta", {}),
-            algorithm=(package.get("meta") or {}).get("hidden_algorithm"),
+            internal_meta=meta,
             # difficulty: meta.difficulty.label (사후 calibration, RFC R4) 승격. 미주석이면 None.
-            difficulty=((package.get("meta") or {}).get("difficulty") or {}).get(
-                "label"
-            ),
+            difficulty=(meta.get("difficulty") or {}).get("label"),
             solution_code=solution.get("golden_code"),
             solution_language=solution.get("language"),
             status="draft",
@@ -76,6 +104,7 @@ def _insert_problem(conn: Connection, package: dict[str, Any], now: datetime) ->
                 for i, c in enumerate(cases)
             ],
         )
+    _insert_problem_algorithms(conn, problem_id, meta)
     return problem_id
 
 

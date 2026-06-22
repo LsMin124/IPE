@@ -77,10 +77,10 @@ psql "postgresql://<DB_USER>:<PASSWORD>@127.0.0.1:16380/fly-db"
 
 ---
 
-## 3. 스키마 (3 테이블)
+## 3. 스키마 (4 테이블)
 
 파이프라인이 alembic으로 소유/관리한다(`ipe/v2/db/`). 백엔드는 **읽기 전용으로 가정**하고
-DDL을 변경하지 않는다. 현재 적용 버전: `0003_add_difficulty_column` (head).
+DDL을 변경하지 않는다. 현재 적용 버전: `0004_algorithm_junction` (head).
 
 ```sql
 CREATE TABLE problems (
@@ -92,7 +92,6 @@ CREATE TABLE problems (
     constraints       JSONB       NOT NULL,              -- [{name,min_value,max_value,description}]
     samples           JSONB       NOT NULL,              -- [{input_text,expected_output,description}]
     internal_meta     JSONB       NOT NULL,              -- ⚠️ 내부 전용(응시자 비노출): hidden_algorithm/composition/qa 등
-    algorithm         VARCHAR(64) NULL,                  -- 알고리즘 분류(은닉 코어=시드, 예 'dijkstra'). internal_meta.hidden_algorithm 승격 — 쿼리/필터용. ⚠️ 응시자 비노출 (mig 0002, indexed)
     difficulty        VARCHAR(64) NULL,                  -- BOJ 티어 라벨(예 'Gold IV'). meta.difficulty.label 승격. 옵션(--with-difficulty 켠 경우만 채워짐) (mig 0003, indexed)
     solution_code     TEXT        NULL,                  -- ⚠️ 내부 정해코드(응시자 비노출)
     solution_language VARCHAR(16) NULL,                  -- 예: 'python'
@@ -111,6 +110,14 @@ CREATE TABLE test_cases (
 );
 CREATE INDEX ix_test_cases_problem_id ON test_cases (problem_id);
 
+CREATE TABLE problem_algorithms (                        -- 문제 ↔ 알고리즘 분류 N:M (알고리즘 필터링용)
+    problem_id VARCHAR(36) NOT NULL REFERENCES problems(id) ON DELETE CASCADE,
+    algorithm  VARCHAR(64) NOT NULL,                     -- TargetAlgorithm 값(예 'dijkstra', 19종)
+    role       VARCHAR(16) NOT NULL,                     -- 'core'(은닉 코어) | 'composition'(합성 기법)
+    PRIMARY KEY (problem_id, algorithm)                  -- ⚠️ 응시자 비노출 (내부 분류)
+);
+CREATE INDEX ix_problem_algorithms_algorithm ON problem_algorithms (algorithm);
+
 CREATE TABLE generation_requests (                       -- 생성 감사 로그(백엔드는 보통 불필요)
     idempotency_key VARCHAR(64) PRIMARY KEY,
     seed            VARCHAR(64) NOT NULL,                -- 시드 알고리즘 hint
@@ -125,10 +132,10 @@ CREATE TABLE generation_requests (                       -- 생성 감사 로그
 ```
 
 ### 핵심 규약
-- **응시자 비노출 컬럼**: `internal_meta`, `solution_code`(+`solution_language`),
-  `algorithm`(은닉 코어). 응시자 API로 절대 내보내지 말 것. 채점/검수 내부에서만 사용.
-  `difficulty`(티어 라벨)는 노출 가능하나(백엔드 product 정책) `internal_meta.difficulty`
-  의 reasoning/factors 는 정해 단서가 될 수 있어 비노출.
+- **응시자 비노출**: `internal_meta`, `solution_code`(+`solution_language`),
+  `problem_algorithms` 전체(은닉 코어+합성). 응시자 API로 절대 내보내지 말 것 — 채점/검수
+  /내부 필터에서만 사용. `difficulty`(티어 라벨)는 노출 가능하나(백엔드 product 정책)
+  `internal_meta.difficulty` 의 reasoning/factors 는 정해 단서가 될 수 있어 비노출.
 - **status 생애주기**: 파이프라인은 `draft`로 적재. **`published` 승격은 백엔드 책임**
   (응시자에게는 `published`만 노출 권장).
 - **채점**: `test_cases.input` → 응시자 코드 실행 → stdout과 `expected`를 **줄단위
@@ -158,6 +165,16 @@ SELECT seq, input, expected, category
 FROM test_cases
 WHERE problem_id = :problem_id
 ORDER BY seq;
+
+-- 알고리즘 분류 필터: 'segtree' 가 코어든 합성이든 포함된 published 문제
+SELECT DISTINCT p.id, p.title
+FROM problems p
+JOIN problem_algorithms pa ON pa.problem_id = p.id
+WHERE pa.algorithm = 'segtree' AND p.status = 'published'
+ORDER BY p.title;
+
+-- 한 문제의 알고리즘 구성 (코어 + 합성)
+SELECT algorithm, role FROM problem_algorithms WHERE problem_id = :problem_id;
 
 -- 내부 검수용: 정해코드 + 숨은 알고리즘
 SELECT solution_language, solution_code, internal_meta

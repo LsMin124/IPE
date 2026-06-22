@@ -224,7 +224,7 @@ def _row_to_package(row: Any) -> dict[str, Any]:
             "language": row["solution_language"],
         },
         "meta": {
-            "hidden_algorithm": row["algorithm"],
+            "hidden_algorithm": meta.get("hidden_algorithm"),
             "composition": meta.get("composition") or [],
         },
     }

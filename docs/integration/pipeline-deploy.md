@@ -1,6 +1,6 @@
 # 파이프라인 API 서버 배포 가이드 (Slice 2)
 
-계약: [pipeline-service-api-contract.md](pipeline-service-api-contract.md) (v2.0).
+계약: [pipeline-service-api-contract.md](pipeline-service-api-contract.md) (v3.0).
 구현: `ipe/v2/api.py` (`create_app` 팩토리).
 
 ## 로컬 실행 (개발)

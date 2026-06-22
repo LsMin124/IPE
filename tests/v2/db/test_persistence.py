@@ -12,7 +12,14 @@ from typing import Any
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.engine import Engine
 
-from ipe.v2.db import generation_requests, init_schema, persist_run, problems, test_cases
+from ipe.v2.db import (
+    generation_requests,
+    init_schema,
+    persist_run,
+    problem_algorithms,
+    problems,
+    test_cases,
+)
 
 
 def _engine(tmp_path: Path) -> Engine:
@@ -22,7 +29,11 @@ def _engine(tmp_path: Path) -> Engine:
 
 
 def _body(
-    *, run_id: str, final_status: str = "success", with_package: bool = True
+    *,
+    run_id: str,
+    final_status: str = "success",
+    with_package: bool = True,
+    composition: list[str] | None = None,
 ) -> dict[str, Any]:
     package: dict[str, Any] | None = None
     if with_package:
@@ -60,6 +71,9 @@ def _body(
                 "package_version": "1.0",
                 "mode": "p2",
                 "hidden_algorithm": "dijkstra",
+                "composition": (
+                    ["union_find", "toposort"] if composition is None else composition
+                ),
                 "timing": {"max_golden_elapsed_ms": 40},
             },
         }
@@ -92,7 +106,6 @@ def test_persist_success_maps_all_tables(tmp_path: Path) -> None:
         assert prob["status"] == "draft"
         assert prob["time_limit_ms"] == 1000  # max(1000, 40*3=120)
         assert prob["internal_meta"]["hidden_algorithm"] == "dijkstra"
-        assert prob["algorithm"] == "dijkstra"  # 1급 컬럼 승격 (meta 와 동일값)
 
         cases = (
             c.execute(
@@ -160,3 +173,49 @@ def test_persist_without_package_logs_only(tmp_path: Path) -> None:
         )
         assert req["final_status"] == "fail_verification"
         assert req["problem_id"] is None  # 감사 로그만
+
+
+def test_persist_writes_algorithm_junction(tmp_path: Path) -> None:
+    """problem_algorithms: 코어(role='core') + 합성(role='composition') N:M 적재."""
+    eng = _engine(tmp_path)
+    pid = persist_run(eng, _body(run_id="algo"))  # composition=[union_find, toposort]
+
+    assert pid is not None
+    with eng.connect() as c:
+        rows = (
+            c.execute(
+                select(problem_algorithms).where(
+                    problem_algorithms.c.problem_id == pid
+                )
+            )
+            .mappings()
+            .all()
+        )
+    pairs = {(r["algorithm"], r["role"]) for r in rows}
+    assert ("dijkstra", "core") in pairs  # 코어 = hidden_algorithm
+    assert ("union_find", "composition") in pairs
+    assert ("toposort", "composition") in pairs
+    assert len(rows) == 3  # 코어 1 + 합성 2
+
+
+def test_persist_algorithm_junction_core_only_when_no_composition(
+    tmp_path: Path,
+) -> None:
+    """P1(합성 없음): 코어 1행만 적재된다."""
+    eng = _engine(tmp_path)
+    pid = persist_run(eng, _body(run_id="p1", composition=[]))
+
+    assert pid is not None
+    with eng.connect() as c:
+        rows = (
+            c.execute(
+                select(problem_algorithms).where(
+                    problem_algorithms.c.problem_id == pid
+                )
+            )
+            .mappings()
+            .all()
+        )
+    assert len(rows) == 1
+    assert rows[0]["algorithm"] == "dijkstra"
+    assert rows[0]["role"] == "core"

@@ -8,13 +8,20 @@
 """
 
 from .persistence import init_schema, persist_run
-from .schema import generation_requests, metadata, problems, test_cases
+from .schema import (
+    generation_requests,
+    metadata,
+    problem_algorithms,
+    problems,
+    test_cases,
+)
 
 __all__ = [
     "generation_requests",
     "init_schema",
     "metadata",
     "persist_run",
+    "problem_algorithms",
     "problems",
     "test_cases",
 ]
