@@ -1,6 +1,6 @@
 # 파이프라인 API 서버 배포 가이드 (Slice 2)
 
-계약: [pipeline-service-api-contract.md](pipeline-service-api-contract.md) (v1.0).
+계약: [pipeline-service-api-contract.md](pipeline-service-api-contract.md) (v2.0).
 구현: `ipe/v2/api.py` (`create_app` 팩토리).
 
 ## 로컬 실행 (개발)
@@ -52,7 +52,7 @@ curl -fsS http://HOST:8000/healthz
 # 2) 생성 시작 (~$0.5, 2~6분)
 curl -fsS -X POST http://HOST:8000/v1/problems/generate \
   -H "X-API-Key: $IPE_API_KEY" -H "Content-Type: application/json" \
-  -d '{"mode":"hidden","seed_algorithm":"dijkstra","idempotency_key":"smoke-1"}'
+  -d '{"mode":"p2","seed_algorithm":"dijkstra","idempotency_key":"smoke-1"}'
 
 # 3) 폴링 (15~30s 간격) — completed + final_status 확인
 curl -fsS http://HOST:8000/v1/jobs/<job_id> -H "X-API-Key: $IPE_API_KEY"

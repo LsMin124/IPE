@@ -1,9 +1,11 @@
-# IPE 파이프라인 ↔ 서비스 백엔드 API 계약 (v1.0)
+# IPE 파이프라인 ↔ 서비스 백엔드 API 계약 (v2.0)
 
-> **문서 상태**: 확정 — 2026-06-12, 파이프라인 측 작성.
+> **문서 상태**: 확정 — 2026-06-22 (v2.0), 파이프라인 측 작성.
 > **대상 독자**: 서비스 백엔드(BOJ 유사) 구현 개발자.
 > **변경 절차**: 본 문서가 계약의 단일 진실원천. 필드 추가는 minor(하위호환),
 > 제거/의미 변경은 major + 양측 합의.
+> **⚠ v2.0 (breaking)**: `mode` enum 이 `hidden`/`direct` → `p1`/`p2` 로 의미 변경(=major).
+> 백엔드 미연동 시점이라 양측 합의 없이 반영 — 기존 v1.0 소비자 없음. 전체 변경이력 §7.
 
 ---
 
@@ -312,5 +314,14 @@ two_sum, segtree, fenwick, heap, sieve, string_match
 | API 서버 (본 계약 3 엔드포인트) | 🔨 Slice 1 — 계약 확정 후 즉시 (반나절~1일) |
 | `golden_elapsed_ms` 메타 | 🔨 Slice 1 에 포함 |
 | 컨테이너/배포 | 🔨 Slice 2 (반나절) |
+
+---
+
+## 7. 변경이력
+
+| 버전 | 일자 | 변경 |
+|---|---|---|
+| **v2.0** | 2026-06-22 | **[breaking]** `mode` enum `hidden`/`direct` → `p1`/`p2` (§2.1). 의미 변경=major. `p1`=단일·공개·QA 3종 / `p2`=합성·은닉·QA 4종 — 모드가 합성/은닉/지문/QA관점 4노브를 한 번에 결정. 패키지 `meta.mode`·`meta.composition`·`meta.qa.verdicts` 도 모드에 종속. 백엔드 미연동 시점 반영(기존 v1.0 소비자 없음).<br>**[additive]** `meta.difficulty`(RFC R4 사후 calibration, 옵션 — `--with-difficulty`/`IPE_WITH_DIFFICULTY` 켤 때만) + 직접 적재 DB 의 `problems.algorithm`·`problems.difficulty` 1급 컬럼. 키/컬럼 부재 시 무시 안전(하위호환). |
+| v1.0 | 2026-06-12 | 최초 확정 — 3 엔드포인트(§2), ProblemPackage 스키마(§2.5), 직접 적재 모드(§3.5). |
 
 문의: 파이프라인 측 (본 repo). 계약 개정은 본 문서 PR 로.
