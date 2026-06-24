@@ -75,6 +75,8 @@ def seed_from_run_id(run_id: str) -> int:
 # 위 직렬화 규약의 사람/LLM용 prose. **이 모듈의 serializer 와 같은 파일에 두는
 # 이유**: 규약이 바뀌면 렌더도 같이 바뀌어야 한다 (드리프트 = ratio 0.0 의 원인).
 
+# 비-graph·비-indexing 타입의 고정 prose. graph 류(weighted_edges/tree_edges)와 참조
+# 스칼라는 graph_shape/indexing 에서 **파생**하므로 여기 두지 않는다 (단일 진실원천).
 _FORMAT_TEXT = {
     "int": "한 줄에 정수 하나.",
     "bool": "한 줄에 0 또는 1.",
@@ -86,26 +88,52 @@ _FORMAT_TEXT = {
     ),
     "int_matrix": "첫 줄에 'R C'(행 수, 열 수), 이어서 R 줄에 각 C 개의 공백구분 정수.",
     "grid": "첫 줄에 'R C'(행 수, 열 수), 이어서 R 줄에 각 C 개의 공백구분 정수.",
-    "weighted_edges": (
-        "첫 줄에 'V E'(정점 수, 간선 수), 이어서 E 줄에 'u v w'(간선 u-v 와 정수 "
-        "가중치 w). 정점 번호는 1..V (1-indexed). self-loop 없음, 다중 간선 가능, "
-        "연결은 보장되지 않음(분리 컴포넌트 가능)."
-    ),
 }
 
 
-def _render_field(field: IOFieldSpec) -> str:
+def _vertex_index_phrase(indexing: int) -> str:
+    """그래프 정점 번호 인덱싱 규약 prose (io_schema.indexing 단일 진실 투영)."""
+    return "0..V-1 (0-indexed)" if indexing == 0 else "1..V (1-indexed)"
+
+
+def _structural_clause(field: IOFieldSpec) -> str:
+    """weighted_edges 구조 사실 prose (graph_shape 단일 진실 투영) — self-loop/다중간선/
+    연결/방향성. shape=None 이면 현 상수(레거시; directedness 는 F8 미정이라 생략).
+    """
+    shape = field.graph_shape
+    self_loops = shape.self_loops if shape is not None else False
+    multi_edges = shape.multi_edges if shape is not None else True
+    connectivity = shape.connectivity if shape is not None else "maybe_disconnected"
+    parts = [
+        "self-loop 가능" if self_loops else "self-loop 없음",
+        "다중 간선 가능" if multi_edges else "다중 간선 없음(단순 그래프)",
+        "연결 보장" if connectivity == "connected" else "연결 비보장(분리 컴포넌트 가능)",
+    ]
+    if shape is not None:  # directedness 는 핀됐을 때만 (None=레거시 F8 미정)
+        parts.insert(0, "단방향(u→v)" if shape.directed else "양방향(u↔v)")
+    return ", ".join(parts)
+
+
+def _render_field(field: IOFieldSpec, indexing: int) -> str:
     if _is_reference(field):
-        # 참조 스칼라 — 가리키는 collection 의 1-indexed 원소/정점 번호 (1 이상 그 크기 이하).
+        # 참조 스칼라 — 가리키는 collection 의 원소/정점 번호 (indexing base).
+        lo, bound = ("0", "크기 미만") if indexing == 0 else ("1", "크기 이하")
+        label = "0-indexed" if indexing == 0 else "1-indexed"
         return (
             f"{field.name}: 한 줄에 정수 하나 — {field.references} 의 원소/정점을 가리키는 "
-            f"1-indexed 번호 (1 이상 {field.references} 의 크기 이하)."
+            f"{label} 번호 ({lo} 이상 {field.references} 의 {bound})."
+        )
+    if field.type == "weighted_edges":
+        return (
+            f"{field.name}: 첫 줄에 'V E'(정점 수, 간선 수), 이어서 E 줄에 'u v w'(간선 "
+            f"u-v 와 정수 가중치 w). 정점 번호는 {_vertex_index_phrase(indexing)}. "
+            f"{_structural_clause(field)}."
         )
     if field.type == "tree_edges":
         edge_line = "'u v w'(간선과 정수 가중치)" if field.value_range else "'u v'"
         return (
             f"{field.name}: 첫 줄에 정점 수 V, 이어서 V-1 줄에 {edge_line}. "
-            "정점 번호는 1..V (1-indexed), 트리(연결·무사이클) 보장."
+            f"정점 번호는 {_vertex_index_phrase(indexing)}, 트리(연결·무사이클) 보장."
         )
     if field.type in ("int_matrix", "grid") and field.cols_range is not None:
         cr = field.cols_range
@@ -161,23 +189,26 @@ def render_constraints(io_schema: IOSchema) -> list[ConstraintRange]:
     (``1 ≤ s ≤ V``), 행렬 고정 열은 ``C=K`` 로, 컬렉션은 size(V/N/R)+value 를 명시한다.
     """
     sized = {f.name: f for f in io_schema.inputs}
+    base = io_schema.indexing  # F9 참조 인덱싱 base (1=현행 / 0=0-indexed)
     out: list[ConstraintRange] = []
     for f in io_schema.inputs:
         if _is_reference(f):
             ref = sized.get(f.references) if f.references is not None else None
-            hi = (
+            size_hi = (
                 ref.size_range.max_value
                 if ref is not None and ref.size_range is not None
                 else 1
             )
+            label = "0-indexed" if base == 0 else "1-indexed"
+            bound = "크기 미만" if base == 0 else "크기 이하"
             out.append(
                 ConstraintRange(
                     name=f.name,
-                    min_value=1,
-                    max_value=hi,
+                    min_value=base,
+                    max_value=base + size_hi - 1,
                     description=(
-                        f"{f.references} 의 1-indexed 번호 "
-                        f"(1 이상 {f.references} 의 크기 이하)"
+                        f"{f.references} 의 {label} 번호 "
+                        f"({base} 이상 {f.references} 의 {bound})"
                     ),
                 )
             )
@@ -233,11 +264,49 @@ def render_input_format(io_schema: IOSchema) -> str:
     생성 입력이 **한 규약**을 보게 한다 (M4 step6 — dijkstra anchor ratio 0.0 로
     실증된 직렬화↔파서 불일치의 구조적 해소).
     """
-    parts = [_render_field(f) for f in io_schema.inputs]
+    parts = [_render_field(f, io_schema.indexing) for f in io_schema.inputs]
     if len(parts) == 1:
         return f"표준입력으로 주어진다. {parts[0]}"
     numbered = "\n".join(f"{i + 1}) {p}" for i, p in enumerate(parts))
     return "표준입력으로 다음 필드들이 순서대로 줄 단위 주어진다:\n" + numbered
+
+
+def render_structural_facts(io_schema: IOSchema) -> list[str]:
+    """io_schema → 그래프 **구조 사실**의 기계 파생 진술 (단일 진실원천, F6~F8).
+
+    formalizer/narrative 프롬프트의 self-loop/다중간선/방향성 prose 규칙을 대체한다 —
+    narrative 는 이것을 DATA 로 받아 '서술'하고(규칙 회피가 아니라), QA/faithfulness 는
+    narrative ↔ 이 사실을 **기계 비교**로 검증한다. graph_shape 가 핀된 graph 필드만
+    대상(없으면 빈 list = 비-graph 문제엔 구조 사실 없음). 인덱싱(F9)은 의미가 아니라
+    **형식**이므로 여기 넣지 않는다(render_input_format 의 format 계약 몫).
+    """
+    facts: list[str] = []
+    for f in io_schema.inputs:
+        shape = f.graph_shape
+        if f.type not in ("weighted_edges", "tree_edges") or shape is None:
+            continue
+        prefix = f"{f.name}(그래프)"
+        direction = "단방향(u→v)" if shape.directed else "양방향(u↔v, 무방향)"
+        loop = "자기 간선(self-loop) 가능" if shape.self_loops else "자기 간선 없음"
+        multi = (
+            "같은 쌍 다중 간선 가능"
+            if shape.multi_edges
+            else "같은 쌍 다중 간선 없음(단순 그래프)"
+        )
+        conn = (
+            "연결 보장"
+            if shape.connectivity == "connected"
+            else "연결 비보장(분리 컴포넌트·도달 불가 가능)"
+        )
+        facts.extend(
+            [
+                f"{prefix}: {direction} 간선",
+                f"{prefix}: {loop}",
+                f"{prefix}: {multi}",
+                f"{prefix}: {conn}",
+            ]
+        )
+    return facts
 
 
 def generate_inputs(
@@ -279,6 +348,7 @@ def _serialize_inputs(
     """2-pass — 비참조 필드 먼저(실제 addressable 크기 기록) → 참조 스칼라를 그 크기에
     바인딩. 참조 없는 schema 는 1-pass 와 동일 rng 순서(기존 출력 보존). 선언 순서로 join.
     """
+    indexing = io_schema.indexing  # F9 단일 진실원천 (정점/원소 참조 인덱싱 base)
     texts: dict[str, str] = {}
     sizes: dict[str, int] = {}
     deferred: list[IOFieldSpec] = []
@@ -286,13 +356,15 @@ def _serialize_inputs(
         if _is_reference(f):
             deferred.append(f)  # pass 2 — 참조 대상 크기 확정 후 생성
             continue
-        text, size = _serialize_field(f, tier_bounds.get(f.name), rng, bias=bias)
+        text, size = _serialize_field(
+            f, tier_bounds.get(f.name), rng, bias=bias, indexing=indexing
+        )
         texts[f.name] = text
         if size is not None:
             sizes[f.name] = size
     for f in deferred:
         ref_size = sizes.get(f.references) if f.references is not None else None
-        texts[f.name] = _serialize_reference(ref_size, bias, rng)
+        texts[f.name] = _serialize_reference(ref_size, bias, rng, indexing=indexing)
     return "\n".join(texts[f.name] for f in io_schema.inputs)
 
 
@@ -302,9 +374,11 @@ def _serialize_field(
     rng: random.Random,
     *,
     bias: _Bias,
+    indexing: int,
 ) -> tuple[str, int | None]:
     """필드 직렬화 → (text, addressable 크기). 크기는 참조 스칼라가 바인딩할 대상
-    (배열 N · 행렬 R · 그래프 V); 순수 스칼라(int/bool/float)는 None.
+    (배열 N · 행렬 R · 그래프 V); 순수 스칼라(int/bool/float)는 None. ``indexing`` 은
+    graph 정점 번호 base (비-graph 타입은 무관).
     """
     t = field.type
     if t == "int":
@@ -323,24 +397,25 @@ def _serialize_field(
     if t in ("int_matrix", "grid"):  # grid = int_matrix 와 동일 canonical 규약
         return _serialize_int_matrix(field, tier_bound, rng, bias=bias)
     if t == "weighted_edges":
-        return _serialize_weighted_edges(field, tier_bound, rng, bias=bias)
+        return _serialize_weighted_edges(field, tier_bound, rng, bias=bias, indexing=indexing)
     if t == "tree_edges":
-        return _serialize_tree_edges(field, tier_bound, rng, bias=bias)
+        return _serialize_tree_edges(field, tier_bound, rng, bias=bias, indexing=indexing)
     msg = f"io_type '{t}' 미지원"
     raise NotImplementedError(msg)
 
 
 def _serialize_reference(
-    ref_size: int | None, bias: _Bias, rng: random.Random
+    ref_size: int | None, bias: _Bias, rng: random.Random, *, indexing: int
 ) -> str:
-    """참조 스칼라 값 — 참조 대상의 **실제 크기**에 1-indexed 바인딩 [1, size].
+    """참조 스칼라 값 — 참조 대상의 **실제 크기**에 바인딩 [base, base+size-1].
 
-    value_range·tier 를 보지 않는다 (정적 range 로 표현 불가한 데이터 의존 차원). dangling
-    /빈 컬렉션이면 size=1 로 안전 default(crash 회피). bias 는 경계 선택(min/empty→1,
-    max→size).
+    인덱싱 base = ``indexing`` (1=1-indexed 현행 / 0=0-indexed). value_range·tier 를
+    보지 않는다 (정적 range 로 표현 불가한 데이터 의존 차원). dangling/빈 컬렉션이면
+    size=1 로 안전 default(crash 회피). bias 는 경계 선택(min/empty→base, max→상한).
     """
     size = max(ref_size if ref_size is not None else 1, 1)
-    return str(_pick_value((1, size), bias, rng))
+    base = indexing
+    return str(_pick_value((base, base + size - 1), bias, rng))
 
 
 def _serialize_int_array(
@@ -401,6 +476,11 @@ def _backbone(start: int, end: int, rng: random.Random) -> list[tuple[int, int]]
     return [(rng.randint(start, i - 1), i) for i in range(start + 1, end + 1)]
 
 
+def _edge_key(u: int, t: int, *, directed: bool) -> tuple[int, int]:
+    """multi_edges=False(단순 그래프) 중복 판정 키 — directed 면 순서쌍, undirected 면 무순쌍."""
+    return (u, t) if directed else (min(u, t), max(u, t))
+
+
 def _graph_vertex_count(
     field: IOFieldSpec,
     tier_bound: ConstraintRange | None,
@@ -418,31 +498,57 @@ def _serialize_weighted_edges(
     rng: random.Random,
     *,
     bias: _Bias,
+    indexing: int,
 ) -> tuple[str, int]:
-    """``V E`` + E 줄 ``u v w`` (1-indexed). backbone 연결 + bias 별 밀도/구조.
+    """``V E`` + E 줄 ``u v w``. backbone 연결 + bias 별 밀도/구조. 구조 사실은
+    ``field.graph_shape`` 에서 READ (단일 진실) — None 이면 현 상수(self-loop 없음·
+    다중간선 허용·연결 비보장)로 동작(byte-identical).
 
-    반환 크기 = 정점 수 V (참조 스칼라 s/t 가 [1,V] 로 바인딩할 대상).
+    반환 크기 = 정점 수 V (참조 스칼라 s/t 가 [base, base+V-1] 로 바인딩할 대상).
+    정점 번호 base = ``indexing`` (1=1-indexed 현행 / 0=0-indexed).
     """
+    shape = field.graph_shape
+    self_loops = shape.self_loops if shape is not None else False
+    multi_edges = shape.multi_edges if shape is not None else True
+    # directed 는 간선 방출엔 무관(``u v w`` 동일) — multi_edges=False 중복 판정에만 쓰임.
+    directed = shape.directed if shape is not None else True
+    connected = shape.connectivity == "connected" if shape is not None else False
+    base = indexing
     if bias == "empty":
         # 퇴화 최소 그래프 — 단, size_range.min 을 존중(V≥2 스키마면 '2 0').
         # 하한 무시하고 V=1 을 내면 constraints(V≥min)와 모순돼 QA reject(N=18 실측).
         vmin = max(_size_bounds(field, tier_bound)[0], 1)
-        return f"{vmin} 0", vmin  # V_min 정점, 간선 0
+        return f"{vmin} 0", vmin  # V_min 정점, 간선 0 (헤더는 카운트라 indexing 무관)
     v = _graph_vertex_count(field, tier_bound, rng, bias)
     v = min(v, _MAX_ELEMENTS // 2)  # E ≤ 2V → 간선 총량 캡
-    if bias == "disconnected":
+    if bias == "disconnected" and not connected:
         v = max(v, 2)  # 두 컴포넌트가 가능한 최소
         half = (v + 1) // 2
-        edges = _backbone(1, half, rng) + _backbone(half + 1, v, rng)
-    else:
-        edges = _backbone(1, v, rng)
+        edges = _backbone(base, base + half - 1, rng) + _backbone(
+            base + half, base + v - 1, rng
+        )
+    else:  # connected 면 disconnected bias 도 단일 컴포넌트(구조 사실 우선)
+        edges = _backbone(base, base + v - 1, rng)
         extra = 0 if bias == "min" else (v if bias == "max" else rng.randint(0, v))
         if v >= 2:
+            seen = (
+                {_edge_key(u, t, directed=directed) for u, t in edges}
+                if not multi_edges
+                else None
+            )
             for _ in range(extra):
-                u = rng.randint(1, v)
-                t = rng.randint(1, v - 1)
-                if t >= u:  # self-loop 회피 (다중간선은 허용)
-                    t += 1
+                u = rng.randint(base, base + v - 1)
+                if self_loops:
+                    t = rng.randint(base, base + v - 1)  # 자기 간선 포함 가능
+                else:
+                    t = rng.randint(base, base + v - 2)
+                    if t >= u:  # self-loop 회피 (다중간선은 허용)
+                        t += 1
+                if seen is not None:  # multi_edges=False → 중복/자기간선 skip
+                    key = _edge_key(u, t, directed=directed)
+                    if (not self_loops and u == t) or key in seen:
+                        continue
+                    seen.add(key)
                 edges.append((u, t))
     lo, hi = _element_bounds(field)  # value_range = 가중치
     lines = [f"{u} {t} {rng.randint(lo, hi)}" for u, t in edges]
@@ -455,11 +561,15 @@ def _serialize_tree_edges(
     rng: random.Random,
     *,
     bias: _Bias,
+    indexing: int,
 ) -> tuple[str, int]:
     """``V`` + (V-1) 줄 ``u v`` (value_range 있으면 ``u v w``). 랜덤 부착 트리.
 
-    트리는 정의상 연결 — disconnected bias 는 크기 random 으로만 작용. 반환 크기 = V.
+    트리는 정의상 연결·무사이클·단순 → graph_shape 의 connectivity/multi_edges/
+    self_loops 는 구조적으로 고정(직렬화기가 보장). 정점 번호 base = ``indexing``.
+    disconnected bias 는 크기 random 으로만 작용. 반환 크기 = V.
     """
+    base = indexing
     if bias == "empty":
         # 최소 트리 — size_range.min 존중(V≥2 스키마면 단일 정점이 아니라 V_min 트리).
         v = max(_size_bounds(field, tier_bound)[0], 1)
@@ -467,8 +577,8 @@ def _serialize_tree_edges(
         v = _graph_vertex_count(field, tier_bound, rng, bias)
     v = min(v, _MAX_ELEMENTS)  # V-1 간선
     if v <= 1:
-        return "1", 1  # 단일 정점 트리
-    edges = _backbone(1, v, rng)
+        return "1", 1  # 단일 정점 트리 (헤더는 카운트라 indexing 무관)
+    edges = _backbone(base, base + v - 1, rng)
     if field.value_range is not None:
         lo, hi = _element_bounds(field)
         lines = [f"{u} {t} {rng.randint(lo, hi)}" for u, t in edges]

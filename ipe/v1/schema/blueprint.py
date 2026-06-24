@@ -39,6 +39,42 @@ IOFieldType = Literal[
 OutputType = Literal["int", "int_array", "float", "bool", "string", "yes_no"]
 
 
+class GraphShape(BaseModel):
+    """graph 타입 필드(weighted_edges/tree_edges)의 **구조 사실** — F6~F8 단일 진실원천.
+
+    오늘날 이 사실들은 ``input_gen._serialize_weighted_edges``/``_backbone`` 안에
+    **하드코딩**돼 있고 formalizer/narrative 프롬프트에 prose 규칙으로 **재진술**될
+    뿐이다(O(N²) 모순 표면). IR 필드로 끌어올리면 직렬화기가 이것을 **READ**(단일
+    진실)하고 narrative/QA/faithfulness 가 prose 규칙이 아니라 **기계 비교**로 검증한다.
+
+    기본값은 현 직렬화기 상수와 **동일** → graph_shape 가 None 이거나 기본값이면 생성
+    바이트가 byte-identical(formalizer 가 변주하기 전까지 무위험). ``directed`` 만은
+    오늘날 **어디에도 결정돼 있지 않은** 잠재 모순(F8: 직렬화기는 ``u v w`` 방출 /
+    DijkstraVerifier 는 directed 가정 / narrative 는 '양방향' 자유 서술 → 아무 게이트도
+    못 잡음)이라 **필수**로 핀한다.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    directed: bool = Field(
+        ...,
+        description=(
+            "간선 방향성 (F8 잠재 모순 핀). True=단방향(u→v), False=양방향(u↔v). "
+            "오늘날 어디에도 결정 안 됨 → 반드시 명시."
+        ),
+    )
+    self_loops: bool = Field(
+        default=False, description="자기 자신 간선(u==v) 허용 여부 (F6, 현 상수=False)"
+    )
+    multi_edges: bool = Field(
+        default=True, description="같은 쌍 중복 간선 허용 여부 (F7, 현 상수=True)"
+    )
+    connectivity: Literal["connected", "maybe_disconnected"] = Field(
+        default="maybe_disconnected",
+        description="연결 보장 여부 (F7, weighted_edges 현 상수=maybe_disconnected)",
+    )
+
+
 class IOFieldSpec(BaseModel):
     """입력 한 필드의 formal 명세 — 타입 + 크기/값 범위 (prose 아님)."""
 
@@ -71,6 +107,15 @@ class IOFieldSpec(BaseModel):
             "깨지던 결함의 해소."
         ),
     )
+    graph_shape: GraphShape | None = Field(
+        default=None,
+        description=(
+            "graph 타입(weighted_edges/tree_edges) 의 구조 사실 — directed/self_loops/"
+            "multi_edges/connectivity (F6~F8). None 이면 직렬화기가 현 상수(self-loop "
+            "없음·다중간선 허용·연결 비보장)로 동작(byte-identical). 설정 시 직렬화기가 "
+            "이것을 READ 하고 narrative/QA 가 기계 비교로 검증한다. 비-graph 필드엔 무의미."
+        ),
+    )
     description: str = ""
 
 
@@ -82,6 +127,14 @@ class IOSchema(BaseModel):
     inputs: tuple[IOFieldSpec, ...] = Field(..., min_length=1)
     output_type: OutputType
     output_format: str = Field(..., min_length=1, description="출력 인쇄 형식")
+    indexing: Literal[0, 1] = Field(
+        default=1,
+        description=(
+            "정점/원소 참조 인덱싱 규약 (F9). 1=1-indexed(현행·기본), 0=0-indexed. "
+            "직렬화기(_backbone/참조 스칼라)와 input_format prose 의 단일 진실원천 — "
+            "오늘날 _backbone 에 하드코딩(1)된 것을 IR 필드로 끌어올린다."
+        ),
+    )
 
 
 class OutputInvariant(BaseModel):

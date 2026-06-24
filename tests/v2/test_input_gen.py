@@ -11,6 +11,7 @@ from ipe.v1.schema import (
     ConstraintRange,
     EdgeCaseSpec,
     GeneratorContract,
+    GraphShape,
     IOFieldSpec,
     IOSchema,
     ScaleFamily,
@@ -21,6 +22,7 @@ from ipe.v2.generation.input_gen import (
     generate_inputs,
     render_constraints,
     render_input_format,
+    render_structural_facts,
     seed_from_run_id,
 )
 
@@ -712,3 +714,208 @@ def test_render_multi_field_preserves_order() -> None:
     text = render_input_format(schema)
     assert text.index("K") < text.index("arr")  # io_schema 순서 유지
     assert "1)" in text and "2)" in text  # 필드 순번 명시
+
+
+# ---------- GraphShape: 구조 사실 IR 필드 (Phase 1 F6~F8) ----------
+
+
+def _shaped_edges(shape: GraphShape, lo: int = 5, hi: int = 5) -> IOFieldSpec:
+    return _weighted_edges_field(lo, hi).model_copy(update={"graph_shape": shape})
+
+
+def test_graph_shape_default_is_byte_identical_to_none() -> None:
+    """graph_shape=GraphShape(기본값)은 graph_shape=None 과 byte-identical (현 상수=기본값).
+
+    Phase 1 무위험 핵심 — formalizer 가 변주하기 전까지 생성 바이트 불변.
+    """
+    schema_none = _io_schema(_weighted_edges_field(2, 12))
+    schema_default = _io_schema(_shaped_edges(GraphShape(directed=True), 2, 12))
+    contract = GeneratorContract(
+        scale_families=(ScaleFamily(name="s", case_count=6),),
+        edge_cases=(EdgeCaseSpec(name="disconnected"), EdgeCaseSpec(name="min")),
+    )
+    a = generate_inputs(contract, schema_none, seed=5)
+    b = generate_inputs(contract, schema_default, seed=5)
+    assert [c.input_text for c in a] == [c.input_text for c in b]
+
+
+def test_graph_shape_self_loops_allows_self_edges() -> None:
+    """self_loops=True → 자기 간선(u==t) 출현 가능 (현 상수 False 의 회피를 끈다)."""
+    field = _shaped_edges(GraphShape(directed=True, self_loops=True), 3, 3)
+    contract = GeneratorContract(scale_families=(ScaleFamily(name="s", case_count=60),))
+    has_self_loop = any(
+        u == t
+        for c in generate_inputs(contract, _io_schema(field), seed=1)
+        for u, t, _ in _parse_graph(c.input_text)[2]
+    )
+    assert has_self_loop
+
+
+def test_graph_shape_self_loops_false_never_self_edges() -> None:
+    """self_loops=False(기본) → 자기 간선 절대 없음 (회귀 가드)."""
+    field = _shaped_edges(GraphShape(directed=True, self_loops=False), 3, 3)
+    contract = GeneratorContract(scale_families=(ScaleFamily(name="s", case_count=60),))
+    for c in generate_inputs(contract, _io_schema(field), seed=1):
+        for u, t, _ in _parse_graph(c.input_text)[2]:
+            assert u != t
+
+
+def test_graph_shape_no_multi_edges_yields_simple_graph() -> None:
+    """multi_edges=False → 같은 (u,t) 중복 간선 없음 (단순 그래프)."""
+    field = _shaped_edges(GraphShape(directed=True, multi_edges=False), 5, 5)
+    contract = GeneratorContract(scale_families=(ScaleFamily(name="s", case_count=40),))
+    for c in generate_inputs(contract, _io_schema(field), seed=2):
+        pairs = [(u, t) for u, t, _ in _parse_graph(c.input_text)[2]]
+        assert len(pairs) == len(set(pairs))  # directed 순서쌍 유일
+
+
+def test_graph_shape_connected_overrides_disconnected_bias() -> None:
+    """connectivity=connected → disconnected 엣지케이스도 단일 컴포넌트(구조 사실 우선)."""
+    field = _shaped_edges(GraphShape(directed=True, connectivity="connected"), 6, 6)
+    contract = GeneratorContract(
+        scale_families=(ScaleFamily(name="s", case_count=1),),
+        edge_cases=(EdgeCaseSpec(name="disconnected"),),
+    )
+    dc = next(
+        c
+        for c in generate_inputs(contract, _io_schema(field), seed=0)
+        if c.category == "disconnected"
+    )
+    v, _, edges = _parse_graph(dc.input_text)
+    comps, _ = _uf_components(v, [(u, t) for u, t, _ in edges])
+    assert comps == 1
+
+
+# ---------- indexing: 0-indexed 투영 (Phase 1 F9) ----------
+
+
+def test_indexing_zero_produces_zero_based_vertices() -> None:
+    schema = IOSchema(
+        inputs=(_weighted_edges_field(5, 5),),
+        output_type="int",
+        output_format="x",
+        indexing=0,
+    )
+    contract = GeneratorContract(scale_families=(ScaleFamily(name="s", case_count=10),))
+    saw_zero = False
+    for c in generate_inputs(contract, schema, seed=3):
+        v, _, edges = _parse_graph(c.input_text)
+        assert v == 5
+        for u, t, _ in edges:
+            assert 0 <= u <= v - 1 and 0 <= t <= v - 1  # 0..V-1
+            if u == 0 or t == 0:
+                saw_zero = True
+    assert saw_zero  # 0-indexed 하한 정점 실제 등장
+
+
+def test_indexing_zero_reference_is_zero_based() -> None:
+    schema = IOSchema(
+        inputs=(
+            IOFieldSpec(
+                name="grid",
+                type="weighted_edges",
+                size_range=ConstraintRange(name="grid", min_value=5, max_value=5),
+                value_range=ConstraintRange(name="w", min_value=1, max_value=9),
+            ),
+            IOFieldSpec(name="s", type="int", references="grid"),
+        ),
+        output_type="int",
+        output_format="x",
+        indexing=0,
+    )
+    contract = GeneratorContract(scale_families=(ScaleFamily(name="s", case_count=20),))
+    seen = set()
+    for c in generate_inputs(contract, schema, seed=11):
+        s = int(c.input_text.split("\n")[-1])
+        assert 0 <= s <= 4  # [0, V-1]
+        seen.add(s)
+    assert 0 in seen  # 0-indexed 하한 도달
+
+
+def test_indexing_one_is_byte_identical_to_default() -> None:
+    """indexing=1 명시 == indexing 생략(기본 1) — 회귀 가드."""
+    field = _weighted_edges_field(2, 12)
+    default = IOSchema(inputs=(field,), output_type="int", output_format="x")
+    explicit = IOSchema(
+        inputs=(field,), output_type="int", output_format="x", indexing=1
+    )
+    contract = GeneratorContract(scale_families=(ScaleFamily(name="s", case_count=6),))
+    a = generate_inputs(contract, default, seed=5)
+    b = generate_inputs(contract, explicit, seed=5)
+    assert [c.input_text for c in a] == [c.input_text for c in b]
+
+
+# ---------- render_structural_facts: 구조 사실 투영 (narrative/QA 용 DATA) ----------
+
+
+def test_render_structural_facts_emits_pinned_graph_facts() -> None:
+    field = _shaped_edges(
+        GraphShape(
+            directed=False,
+            self_loops=False,
+            multi_edges=True,
+            connectivity="connected",
+        ),
+        2,
+        10,
+    )
+    joined = " | ".join(render_structural_facts(_io_schema(field)))
+    assert "양방향" in joined  # directed=False
+    assert "자기 간선 없음" in joined
+    assert "다중 간선 가능" in joined
+    assert "연결 보장" in joined
+    assert "edges" in joined  # 필드명 prefix
+
+
+def test_render_structural_facts_directed_self_loop_multi() -> None:
+    field = _shaped_edges(
+        GraphShape(
+            directed=True,
+            self_loops=True,
+            multi_edges=False,
+            connectivity="maybe_disconnected",
+        ),
+        2,
+        10,
+    )
+    joined = " | ".join(render_structural_facts(_io_schema(field)))
+    assert "단방향" in joined
+    assert "자기 간선(self-loop) 가능" in joined
+    assert "단순 그래프" in joined  # multi_edges=False
+    assert "도달 불가 가능" in joined  # maybe_disconnected
+
+
+def test_render_structural_facts_empty_without_shape_or_non_graph() -> None:
+    assert render_structural_facts(_io_schema(_weighted_edges_field(2, 10))) == []
+    assert render_structural_facts(_io_schema(_int_array_field())) == []
+
+
+def test_render_input_format_reflects_graph_shape_and_indexing() -> None:
+    field = _shaped_edges(GraphShape(directed=False, self_loops=True), 2, 10)
+    schema = IOSchema(
+        inputs=(field,), output_type="int", output_format="x", indexing=0
+    )
+    text = render_input_format(schema)
+    assert "0-indexed" in text and "0..V-1" in text
+    assert "양방향" in text  # directed=False 투영
+    assert "self-loop 가능" in text
+
+
+def test_render_constraints_reference_respects_zero_indexing() -> None:
+    schema = IOSchema(
+        inputs=(
+            IOFieldSpec(
+                name="grid",
+                type="weighted_edges",
+                size_range=ConstraintRange(name="grid", min_value=2, max_value=100),
+                value_range=ConstraintRange(name="w", min_value=1, max_value=9),
+            ),
+            IOFieldSpec(name="s", type="int", references="grid"),
+        ),
+        output_type="int",
+        output_format="x",
+        indexing=0,
+    )
+    cons = {c.name: c for c in render_constraints(schema)}
+    assert cons["s"].min_value == 0 and cons["s"].max_value == 99  # [0, V-1]
+    assert "미만" in cons["s"].description

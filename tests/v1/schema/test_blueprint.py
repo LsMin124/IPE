@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from ipe.v1.schema import (
     BlueprintFormalization,
     ConstraintRange,
+    GraphShape,
     IOFieldSpec,
     IOSchema,
     Narrative,
@@ -116,7 +117,62 @@ def test_io_field_optional_ranges_default_none() -> None:
     f = IOFieldSpec(name="s", type="string")
     assert f.size_range is None
     assert f.value_range is None
+    assert f.graph_shape is None  # graph_shape 옵셔널 (Phase 1)
     assert f.description == ""
+
+
+def test_io_schema_indexing_default_one() -> None:
+    schema = IOSchema(
+        inputs=(IOFieldSpec(name="s", type="int"),),
+        output_type="int",
+        output_format="x",
+    )
+    assert schema.indexing == 1  # F9 기본 1-indexed
+
+
+# ---------- GraphShape (Phase 1 F6~F8) ----------
+
+
+def test_graph_shape_requires_directed() -> None:
+    """directed 는 F8 잠재 모순 핀 — 기본값 없이 필수."""
+    with pytest.raises(ValidationError):
+        GraphShape()  # type: ignore[call-arg]
+
+
+def test_graph_shape_defaults_equal_serializer_constants() -> None:
+    g = GraphShape(directed=True)
+    assert g.self_loops is False  # 현 직렬화기 상수
+    assert g.multi_edges is True
+    assert g.connectivity == "maybe_disconnected"
+
+
+def test_graph_shape_is_frozen_and_forbids_extra() -> None:
+    g = GraphShape(directed=False)
+    with pytest.raises(ValidationError):
+        g.directed = True  # type: ignore[misc]
+    with pytest.raises(ValidationError):
+        GraphShape(directed=True, unexpected="nope")  # type: ignore[call-arg]
+
+
+def test_io_field_carries_graph_shape() -> None:
+    f = IOFieldSpec(
+        name="edges",
+        type="weighted_edges",
+        graph_shape=GraphShape(directed=False, self_loops=True),
+    )
+    assert f.graph_shape is not None
+    assert f.graph_shape.directed is False
+    assert f.graph_shape.self_loops is True
+
+
+def test_io_schema_indexing_rejects_out_of_range() -> None:
+    with pytest.raises(ValidationError):
+        IOSchema(
+            inputs=(IOFieldSpec(name="s", type="int"),),
+            output_type="int",
+            output_format="x",
+            indexing=2,  # Literal[0, 1] 만 허용
+        )
 
 
 # ---------- Narrative ----------

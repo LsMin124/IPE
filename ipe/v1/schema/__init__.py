@@ -8,6 +8,7 @@ from __future__ import annotations
 from .algorithm_design import AlgorithmDesign, ComplexityBound, EdgeCase, Invariant
 from .blueprint import (
     BlueprintFormalization,
+    GraphShape,
     IOFieldSpec,
     IOSchema,
     Narrative,
@@ -59,6 +60,7 @@ __all__ = [
     "FailureMode",
     "GeneratedTestCase",
     "GeneratorContract",
+    "GraphShape",
     "IOContract",
     "IOFieldSpec",
     "IOSchema",
