@@ -12,6 +12,8 @@ from __future__ import annotations
 import pytest
 
 from ipe.v1.schema import (
+    ConstraintRange,
+    GraphShape,
     IOFieldSpec,
     IOSchema,
     Narrative,
@@ -115,3 +117,45 @@ def test_faithfulness_preserves_original_state() -> None:
     assert out.faithfulness is not None
     assert out.narrative is state.narrative  # narrative/blueprint 보존
     assert out.blueprint is state.blueprint
+
+
+# ---------- Phase 1b: 구조 사실 머신체크 ----------
+
+
+def _graph_state() -> V2State:
+    """directed 핀된 graph blueprint + narrative — faithfulness 가 구조사실 수령."""
+    bp = ProblemBlueprint(
+        reduction_core=TargetAlgorithm.DIJKSTRA,
+        domain="logistics",
+        io_schema=IOSchema(
+            inputs=(
+                IOFieldSpec(
+                    name="edges",
+                    type="weighted_edges",
+                    size_range=ConstraintRange(name="V", min_value=2, max_value=100),
+                    graph_shape=GraphShape(directed=True),
+                ),
+            ),
+            output_type="int",
+            output_format="단일 정수",
+        ),
+    )
+    base = initial_v2_state("run-v2", TargetAlgorithm.DIJKSTRA)
+    return base.model_copy(update={"blueprint": bp, "narrative": _narrative()})
+
+
+def test_faithfulness_prompt_flags_structural_fact_contradiction() -> None:
+    """Phase 1b: '구조 사실'(directed/self-loop 등)과 narrative 모순 = distortion 규율."""
+    from ipe.v2.nodes.faithfulness import _SYSTEM_PROMPT
+
+    assert "구조 사실" in _SYSTEM_PROMPT
+    assert "directed" in _SYSTEM_PROMPT or "단방향" in _SYSTEM_PROMPT
+
+
+def test_faithfulness_user_prompt_includes_structural_facts() -> None:
+    """graph_shape 핀된 필드면 user prompt 에 구조 사실 DATA 주입 (narrative 와 비교)."""
+    from ipe.v2.nodes.faithfulness import _build_user_prompt
+
+    prompt = _build_user_prompt(_graph_state())
+    assert "구조 사실" in prompt
+    assert "단방향" in prompt  # directed=True 투영

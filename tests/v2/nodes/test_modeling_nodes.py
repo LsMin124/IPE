@@ -443,3 +443,15 @@ def test_tie_break_answer_uniqueness_rules_in_prompts() -> None:
     assert "동률" in _FMT  # tie 해소 또는 tie-invariant 출력
     assert "answer_uniqueness" in _FMT  # invariant kind 예시
     assert "답 유일성" in _NARR  # 답 유일성/동률 해소를 지문에 서술
+
+
+def test_formalizer_prompt_emits_graph_shape_structural_facts() -> None:
+    """Phase 1b: 구조 사실(self-loop/다중간선/연결성/방향성)을 prose 가 아니라
+    graph_shape 필드로 emit 하도록 지시 — 직렬화기 단일 진실 READ. directed 는
+    F8(어디에도 결정 안 된 잠재 모순) 필수 핀. 드리프트 방지."""
+    from ipe.v2.nodes.formalizer import _SYSTEM_PROMPT
+
+    assert "graph_shape" in _SYSTEM_PROMPT  # 구조화 emit (prose 규칙 아님)
+    assert "directed" in _SYSTEM_PROMPT  # F8 방향성 필수 결정
+    assert "self_loops" in _SYSTEM_PROMPT  # 자기 간선 결정
+    assert "connectivity" in _SYSTEM_PROMPT  # 연결성 결정

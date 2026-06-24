@@ -20,6 +20,7 @@ from typing import Protocol
 
 from ipe.v1.schema import NarrativeFaithfulnessReport
 
+from ..generation.input_gen import render_structural_facts
 from ..state import V2State
 
 FAITHFULNESS_MODEL = "claude-opus-4-8"
@@ -51,6 +52,11 @@ typed NarrativeFaithfulnessReport (구조화된 tool call) 로 반환:
   미만 파이프는 사용 금지'라는데 io_schema 에 파이프별 용량 필드가 없음 → 주어진
   입력만으로 풀 수 없다). 은닉(누락)의 역방향 — 지문이 계약보다 *더 많은* 입력을
   전제하면 reject.
+- **그래프 구조 사실 모순도 distortion 이다**: '구조 사실'로 주어진 directed(단방향/
+  양방향)·self-loop·다중 간선·연결성과 narrative 가 **모순**되면 왜곡이다 (예: 구조 사실
+  directed=단방향인데 지문이 '양방향으로 오갈 수 있다'; self-loop 없음인데 '자기 자신으로
+  가는 길'을 서술). 구조 사실은 형식 계약의 일부 — 누락(은닉)은 OK 이나 **모순 서술은
+  reject**. 구조 사실 섹션이 없으면(비-graph) 해당 없음.
 - 모호하지만 모순은 아닌 경우(은닉으로 인한 일반화)는 faithful=true.
 """
 
@@ -69,21 +75,23 @@ def _build_user_prompt(state: V2State) -> str:
         for f in bp.io_schema.inputs
     ]
     mode = "hidden (은닉 — 알고리즘 누락 정상)" if narrative.hidden else "direct"
-    return "\n".join(
-        [
-            f"render mode: {mode}",
-            f"domain: {bp.domain}",
-            "",
-            "[narrative — 먼저 이것만으로 io 계약을 재형식화]",
-            narrative.scenario,
-            "",
-            "[frozen 형식 계약 — 위 재형식화와 비교]",
-            f"io_schema.inputs: {inputs}",
-            f"io_schema.output_type: {bp.io_schema.output_type}",
-            f"io_schema.output_format: {bp.io_schema.output_format}",
-            f"output_invariants: {invariants}",
-        ]
-    )
+    structural = render_structural_facts(bp.io_schema)
+    parts = [
+        f"render mode: {mode}",
+        f"domain: {bp.domain}",
+        "",
+        "[narrative — 먼저 이것만으로 io 계약을 재형식화]",
+        narrative.scenario,
+        "",
+        "[frozen 형식 계약 — 위 재형식화와 비교]",
+        f"io_schema.inputs: {inputs}",
+        f"io_schema.output_type: {bp.io_schema.output_type}",
+        f"io_schema.output_format: {bp.io_schema.output_format}",
+        f"output_invariants: {invariants}",
+    ]
+    if structural:  # graph 구조 사실 — narrative 가 이와 모순되면 distortion
+        parts.extend(["", "[구조 사실 — narrative 가 이와 모순되면 왜곡]", *structural])
+    return "\n".join(parts)
 
 
 class FaithfulnessLLM(Protocol):
