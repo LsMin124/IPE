@@ -22,17 +22,15 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from ..generation.input_gen import derive_degenerate_inputs
+from ..generation.input_gen import (
+    DUPLICATES_LABEL,
+    SORTEDNESS_LABEL,
+    derive_degenerate_inputs,
+)
 from .base import DegenerateInput
 
 if TYPE_CHECKING:
     from ipe.v1.schema import IOSchema
-
-_SORTEDNESS_FACT = {
-    "unsorted": "무정렬(임의 순서)",
-    "non_decreasing": "비내림차 정렬(a[i] ≤ a[i+1])",
-    "strictly_increasing": "순증가 정렬(a[i] < a[i+1], 중복 없음)",
-}
 
 
 class SequenceBackbone:
@@ -65,14 +63,9 @@ class SequenceBackbone:
             if f.type != "int_array" or shape is None:
                 continue
             prefix = f"{f.name}(수열)"
-            facts.append(f"{prefix}: {_SORTEDNESS_FACT[shape.sortedness]}")
+            facts.append(f"{prefix}: {SORTEDNESS_LABEL[shape.sortedness]}")
             if shape.sortedness != "strictly_increasing":
-                dup = (
-                    "중복 값 가능"
-                    if shape.duplicates_allowed
-                    else "중복 값 없음(서로 다른 값)"
-                )
-                facts.append(f"{prefix}: {dup}")
+                facts.append(f"{prefix}: {DUPLICATES_LABEL[shape.duplicates_allowed]}")
         return facts
 
     def derive_edge_inputs(self, io_schema: IOSchema) -> tuple[DegenerateInput, ...]:

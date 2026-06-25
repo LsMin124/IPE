@@ -102,13 +102,12 @@ _FORMAT_TEXT = {
     "bool": "한 줄에 0 또는 1.",
     "float": "한 줄에 실수 하나 (소수 4자리).",
     "string": "한 줄에 영소문자 문자열.",
-    "int_array": (
-        "첫 줄에 원소 개수 N, 다음 줄에 N 개의 공백구분 정수 "
-        "(N=0 이면 '0' 한 줄만)."
-    ),
     "int_matrix": "첫 줄에 'R C'(행 수, 열 수), 이어서 R 줄에 각 C 개의 공백구분 정수.",
     "grid": "첫 줄에 'R C'(행 수, 열 수), 이어서 R 줄에 각 C 개의 공백구분 정수.",
 }
+# int_array 는 빈 수열(N=0) 절을 size_range.min 에서 파생해야 하므로 상수가 아니라
+# ``_int_array_format(field)`` 로 렌더한다 — min≥1 스키마에 'N=0 이면…' 을 무조건 달면
+# render_constraints 의 N∈[min,max](min≥1) 와 정면 충돌해 QA ambiguity reject 된다(실측).
 
 
 def _vertex_index_phrase(indexing: int) -> str:
@@ -134,20 +133,28 @@ def _structural_clause(field: IOFieldSpec) -> str:
     return ", ".join(parts)
 
 
+# 정렬성/중복 라벨 — **단일 진실원천**. format prose(``_sequence_clause``)와 narrative
+# DATA(``SequenceBackbone.structural_facts``)가 둘 다 여기서 READ → 두 곳이 드리프트 불가.
+# non_decreasing 은 수식형(a[i] ≤ a[i+1])으로만 표기 — 평문 '오름차순' 병기는 순증가
+# (strictly ascending)로 읽혀 ``duplicates_allowed=True`` 와 충돌, QA ambiguity reject
+# 됐다(binary_search 실측). 두 곳이 같은 라벨을 보므로 이 모호성이 한 곳에서만 닫힌다.
+SORTEDNESS_LABEL = {
+    "unsorted": "무정렬(임의 순서)",
+    "non_decreasing": "비내림차순 정렬(a[i] ≤ a[i+1])",
+    "strictly_increasing": "순증가 정렬(a[i] < a[i+1], 중복 없음)",
+}
+DUPLICATES_LABEL = {True: "중복 값 가능", False: "중복 값 없음(서로 다른 값)"}
+
+
 def _sequence_clause(shape: SequenceShape) -> str:
-    """int_array 정렬/중복 사실 prose (sequence_shape 단일 진실 투영). format prose 는
-    직렬화 바이트와 **드리프트 금지** 라 serializer 동거 — ``_serialize_int_array`` 가
-    같은 shape 를 READ 해 실제 정렬/distinct 배열을 방출한다(SequenceBackbone.
-    structural_facts 의 *의미* 사실과 짝, 이쪽은 *형식* 기술)."""
-    sort = {
-        "unsorted": "무정렬(임의 순서)",
-        "non_decreasing": "비내림차(오름차순) 정렬",
-        "strictly_increasing": "순증가 정렬(중복 없음)",
-    }[shape.sortedness]
+    """int_array 정렬/중복 사실 prose (sequence_shape 단일 진실 투영 — ``SORTEDNESS_LABEL``/
+    ``DUPLICATES_LABEL`` READ). format prose 는 직렬화 바이트와 **드리프트 금지** 라
+    serializer 동거 — ``_serialize_int_array`` 가 같은 shape 를 READ 해 실제 정렬/distinct
+    배열을 방출한다. structural_facts 와 같은 라벨을 공유 = 형식↔의미 무드리프트."""
+    sort = SORTEDNESS_LABEL[shape.sortedness]
     if shape.sortedness == "strictly_increasing":
         return sort  # distinct 함축 — 중복 절 생략
-    dup = "중복 값 가능" if shape.duplicates_allowed else "중복 값 없음(서로 다른 값)"
-    return f"{sort}, {dup}"
+    return f"{sort}, {DUPLICATES_LABEL[shape.duplicates_allowed]}"
 
 
 def _string_clause(shape: StringShape) -> str:
@@ -160,6 +167,17 @@ def _string_clause(shape: StringShape) -> str:
         "dna": "DNA 염기(A,C,G,T)",
         "alphanumeric": "영문자+숫자(a-zA-Z0-9)",
     }[shape.alphabet]
+
+
+def _int_array_format(field: IOFieldSpec) -> str:
+    """int_array 입력 형식 prose. 빈 수열(N=0) 절은 size_range 가 N=0 을 **실제 허용**할
+    때만(min==0) 방출 — graph empty bias 가 size_range.min 을 존중하는 것과 동형으로,
+    빈/최소 입력 의미를 ``size_range.min`` 단일소스에서 파생한다. min≥1 이면 절 없음(=
+    render_constraints 의 N≥min 과 정합). 'N=0 이면…' 을 무조건 달면 N≥1 스키마에서
+    constraints 와 모순돼 QA ambiguity reject 됐다(loop_accumulate/binary_search/lis 실측)."""
+    base = "첫 줄에 원소 개수 N, 다음 줄에 N 개의 공백구분 정수"
+    lo = field.size_range.min_value if field.size_range is not None else _DEFAULT_SIZE[0]
+    return f"{base} (N=0 이면 '0' 한 줄만)." if lo == 0 else f"{base}."
 
 
 def _render_field(field: IOFieldSpec, indexing: int) -> str:
@@ -183,11 +201,11 @@ def _render_field(field: IOFieldSpec, indexing: int) -> str:
             f"{field.name}: 첫 줄에 정점 수 V, 이어서 V-1 줄에 {edge_line}. "
             f"정점 번호는 {_vertex_index_phrase(indexing)}, 트리(연결·무사이클) 보장."
         )
-    if field.type == "int_array" and field.sequence_shape is not None:
-        return (
-            f"{field.name}: {_FORMAT_TEXT['int_array']} "
-            f"{_sequence_clause(field.sequence_shape)}."
-        )
+    if field.type == "int_array":
+        prose = _int_array_format(field)
+        if field.sequence_shape is not None:
+            return f"{field.name}: {prose} {_sequence_clause(field.sequence_shape)}."
+        return f"{field.name}: {prose}"
     if field.type == "string" and field.string_shape is not None:
         return f"{field.name}: 한 줄에 {_string_clause(field.string_shape)} 문자열."
     if field.type in ("int_matrix", "grid") and field.cols_range is not None:

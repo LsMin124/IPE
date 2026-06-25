@@ -896,6 +896,68 @@ def test_render_multi_field_preserves_order() -> None:
     assert "1)" in text and "2)" in text  # 필드 순번 명시
 
 
+# ---------- int_array N=0 절 / sortedness 단일소스 (Task B — sequence write-side) ----------
+
+
+def test_render_int_array_omits_empty_clause_when_min_positive() -> None:
+    # min≥1 → 'N=0' 절 없음 (render_constraints 의 N≥min 과 정합). loop_accumulate(3/3)·
+    # binary_search(3/3)·lis(3/3) 가 'N=0↔constraints' 모순으로 reject 되던 결함의 해소.
+    text = render_input_format(_io_schema(_int_array_field()))  # min_value=1
+    assert "N=0" not in text
+    # size_range=None (방어 기본 _DEFAULT_SIZE min=1) 도 절 없음 — 명시 확인.
+    none_size = render_input_format(_io_schema(IOFieldSpec(name="a", type="int_array")))
+    assert "N=0" not in none_size
+
+
+def test_render_int_array_strictly_increasing_uses_math_form() -> None:
+    # 순증가도 수식형(a[i] < a[i+1])으로 — structural_facts 와 동일 라벨(단일소스) 확인.
+    field = _int_array_field().model_copy(
+        update={"sequence_shape": SequenceShape(sortedness="strictly_increasing")}
+    )
+    text = render_input_format(_io_schema(field))
+    assert "a[i] < a[i+1]" in text
+    assert "중복 없음" in text
+
+
+def test_render_int_array_states_empty_clause_when_min_zero() -> None:
+    # size_range 가 N=0 을 실제 허용(min==0)할 때만 빈 수열 절 방출 — size_range.min 단일소스.
+    field = _int_array_field().model_copy(
+        update={"size_range": ConstraintRange(name="arr", min_value=0, max_value=20)}
+    )
+    text = render_input_format(_io_schema(field))
+    assert "N=0" in text  # 빈 수열 허용 → 절 명시 (constraints N∈[0,20] 과 정합)
+
+
+def test_render_int_array_sortedness_is_unambiguous() -> None:
+    # non_decreasing 은 수식형(a[i] ≤ a[i+1])으로만 표기 — 평문 '오름차순' 병기는 순증가로
+    # 읽혀 '중복 값 가능' 과 충돌해 QA ambiguity reject 됐다(binary_search 실측).
+    field = _int_array_field().model_copy(
+        update={
+            "sequence_shape": SequenceShape(
+                sortedness="non_decreasing", duplicates_allowed=True
+            )
+        }
+    )
+    text = render_input_format(_io_schema(field))
+    assert "오름차순" not in text
+    assert "a[i] ≤ a[i+1]" in text
+    assert "중복 값 가능" in text
+
+
+def test_sortedness_label_single_sourced_with_structural_facts() -> None:
+    # format prose(render_input_format)와 narrative DATA(SequenceBackbone.structural_facts)가
+    # 같은 SORTEDNESS_LABEL 을 공유 → 한 곳에서 닫힌 모호성이 다른 곳에서 되살아날 수 없다.
+    from ipe.v2.backbone import SequenceBackbone
+
+    field = _int_array_field().model_copy(
+        update={"sequence_shape": SequenceShape(sortedness="non_decreasing")}
+    )
+    fmt = render_input_format(_io_schema(field))
+    facts = " | ".join(SequenceBackbone().structural_facts(_io_schema(field)))
+    assert "비내림차순 정렬(a[i] ≤ a[i+1])" in fmt
+    assert "비내림차순 정렬(a[i] ≤ a[i+1])" in facts
+
+
 # ---------- GraphShape: 구조 사실 IR 필드 (Phase 1 F6~F8) ----------
 
 
