@@ -637,6 +637,75 @@ def test_reference_into_int_array_bound_to_element_count() -> None:
         assert 1 <= k <= 6  # 원소 개수 이내 1-indexed
 
 
+# ---------- reference_kind: index(위치) vs cardinality(개수) 서술 분기 ----------
+
+
+def _cardinality_schema(kind: str) -> IOSchema:
+    """[int_array fields, int K→fields(reference_kind=kind)] — binary_search '적어도 K개' 형상."""
+    return IOSchema(
+        inputs=(
+            IOFieldSpec(
+                name="fields",
+                type="int_array",
+                size_range=ConstraintRange(name="fields", min_value=4, max_value=4),
+                value_range=ConstraintRange(name="v", min_value=1, max_value=9),
+            ),
+            IOFieldSpec(
+                name="K", type="int", references="fields", reference_kind=kind  # type: ignore[arg-type]
+            ),
+        ),
+        output_type="int",
+        output_format="x",
+    )
+
+
+def test_cardinality_reference_renders_count_prose() -> None:
+    """cardinality 참조는 '개수/수량'·'위치 인덱스가 아니다' 로 서술 — index 의 '가리키는
+    번호' 와 갈려 narrative '목표 개수' 서술과 정합(index↔count 모순 해소)."""
+    text = render_input_format(_cardinality_schema("cardinality"))
+    assert "개수" in text and "위치 인덱스가 아니다" in text
+    assert "가리키는" not in text  # 위치 인덱스 단정 안 함
+    assert "fields 의 크기 이하" in text  # 데이터 의존 범위는 보존
+
+
+def test_index_reference_renders_pointer_prose_unchanged() -> None:
+    """index(기본) 참조는 현행 '가리키는 1-indexed 번호' 서술 유지 — graph 무회귀."""
+    text = render_input_format(_cardinality_schema("index"))
+    assert "가리키는" in text and "1-indexed" in text
+    assert "위치 인덱스가 아니다" not in text
+
+
+def test_cardinality_reference_constraint_description() -> None:
+    cons_card = {c.name: c for c in render_constraints(_cardinality_schema("cardinality"))}
+    cons_idx = {c.name: c for c in render_constraints(_cardinality_schema("index"))}
+    assert "개수" in cons_card["K"].description
+    assert "번호" not in cons_card["K"].description
+    assert "번호" in cons_idx["K"].description  # index 는 현행 유지
+    # 숫자 범위·기호는 두 경우 동일 (의미만 갈림, 바인딩 동일)
+    assert cons_card["K"].min_value == cons_idx["K"].min_value == 1
+    assert cons_card["K"].symbolic_max == cons_idx["K"].symbolic_max == "N"
+
+
+def test_cardinality_reference_generation_byte_identical_to_index() -> None:
+    """reference_kind 는 서술만 가른다 — 생성 입력 바이트는 index 와 완전 동일."""
+    contract = GeneratorContract(scale_families=(ScaleFamily(name="s", case_count=12),))
+    idx = [c.input_text for c in generate_inputs(contract, _cardinality_schema("index"), seed=7)]
+    card = [
+        c.input_text
+        for c in generate_inputs(contract, _cardinality_schema("cardinality"), seed=7)
+    ]
+    assert idx == card  # byte-identical
+
+
+def test_describe_io_field_marks_reference_kind() -> None:
+    card = describe_io_field(
+        IOFieldSpec(name="K", type="int", references="fields", reference_kind="cardinality")
+    )
+    idx = describe_io_field(IOFieldSpec(name="s", type="int", references="grid"))
+    assert "개수" in card  # cardinality 마킹
+    assert "위치번호" in idx  # index(기본) 마킹
+
+
 def test_reference_resolves_regardless_of_field_order() -> None:
     """참조 스칼라가 collection 보다 **앞**에 선언돼도 실제 크기에 바인딩."""
     schema = IOSchema(

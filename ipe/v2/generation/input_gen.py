@@ -182,8 +182,14 @@ def _int_array_format(field: IOFieldSpec) -> str:
 
 def _render_field(field: IOFieldSpec, indexing: int) -> str:
     if _is_reference(field):
-        # 참조 스칼라 — 가리키는 collection 의 원소/정점 번호 (indexing base).
+        # 참조 스칼라 — 가리키는 collection 의 크기에 묶인 값 (indexing base).
         lo, bound = ("0", "크기 미만") if indexing == 0 else ("1", "크기 이하")
+        if field.reference_kind == "cardinality":
+            # 개수/수량 (위치 인덱스 아님) — narrative 의 '개수' 서술과 정합.
+            return (
+                f"{field.name}: 한 줄에 정수 하나 — {field.references} 의 크기에 묶인 "
+                f"개수/수량 ({lo} 이상 {field.references} 의 {bound}). 위치 인덱스가 아니다."
+            )
         label = "0-indexed" if indexing == 0 else "1-indexed"
         return (
             f"{field.name}: 한 줄에 정수 하나 — {field.references} 의 원소/정점을 가리키는 "
@@ -231,7 +237,8 @@ def describe_io_field(field: IOFieldSpec) -> str:
     """
     head = f"{field.name}:{field.type}"
     if _is_reference(field):
-        return f"{head} →refs {field.references}(1..|{field.references}|)"
+        kind = "개수" if field.reference_kind == "cardinality" else "위치번호"
+        return f"{head} →refs {field.references}(1..|{field.references}|, {kind})"
     rng = ""
     if field.size_range is not None:
         rng += f" size[{field.size_range.min_value}..{field.size_range.max_value}]"
@@ -284,18 +291,26 @@ def render_constraints(io_schema: IOSchema) -> list[ConstraintRange]:
             )
             if symbolic is not None and base == 0:
                 symbolic = f"{symbolic}-1"  # 0-indexed → '크기 미만' = [0, V-1]
-            label = "0-indexed" if base == 0 else "1-indexed"
             bound = "크기 미만" if base == 0 else "크기 이하"
+            if f.reference_kind == "cardinality":
+                # 개수/수량 (위치 인덱스 아님) — input_format·narrative 와 같은 의미.
+                desc = (
+                    f"{f.references} 의 크기에 묶인 개수/수량 "
+                    f"({base} 이상 {f.references} 의 {bound})"
+                )
+            else:
+                label = "0-indexed" if base == 0 else "1-indexed"
+                desc = (
+                    f"{f.references} 의 {label} 번호 "
+                    f"({base} 이상 {f.references} 의 {bound})"
+                )
             out.append(
                 ConstraintRange(
                     name=f.name,
                     min_value=base,
                     max_value=base + size_hi - 1,
                     symbolic_max=symbolic,
-                    description=(
-                        f"{f.references} 의 {label} 번호 "
-                        f"({base} 이상 {f.references} 의 {bound})"
-                    ),
+                    description=desc,
                 )
             )
             continue

@@ -160,6 +160,19 @@ class IOFieldSpec(BaseModel):
             "구조적 해소 — 차원이 데이터 의존이라 정적 range 로 표현 불가하기 때문."
         ),
     )
+    reference_kind: Literal["index", "cardinality"] = Field(
+        default="index",
+        description=(
+            "references 스칼라의 **의미** (서술 분기 — 생성 바이트는 두 경우 동일). "
+            "index=collection 의 특정 원소/정점을 가리키는 **위치 번호**(현행·기본; "
+            "graph 출발/도착 s·t, 질의 인덱스). cardinality=collection 크기에 묶인 "
+            "**개수/수량**으로, 위치 인덱스가 아니다(예: binary_search '적어도 K개' "
+            "에서 K). 둘 다 생성 범위는 [base, base+크기-1] 로 byte-identical 하나 "
+            "input_format/constraints 서술이 '가리키는 번호' ↔ '~ 이하의 개수' 로 "
+            "갈린다. references 미설정 시 무의미. narrative 가 K 를 '개수'로 서술하는데 "
+            "여기서 index 로 두면 'index↔count' 모순으로 QA reject 되던 결함의 해소."
+        ),
+    )
     cols_range: ConstraintRange | None = Field(
         default=None,
         description=(
