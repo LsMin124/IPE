@@ -23,6 +23,7 @@ from typing import Literal, Protocol
 
 from ipe.v1.schema import StrategySeed, TargetAlgorithm, is_basic
 
+from ..config import ABSTRACT_DOMAIN
 from ..state import V2State
 
 CompositionMode = Literal["single", "composed"]
@@ -105,6 +106,17 @@ def _domain_palette(run_id: str) -> list[str]:
     pool = list(_DOMAIN_POOL)
     rng.shuffle(pool)
     return sorted(pool[:_DOMAIN_PALETTE_SIZE])
+
+
+def _easy_abstract(run_id: str) -> bool:
+    """초급 문제의 abstract(무스토리) vs domained 를 run_id 로 결정 — orthogonal 선택.
+
+    스토리/도메인은 초급에 군더더기라 **abstract 선호**(약 2/3). 도메인 팔레트와 동형의
+    sha256 안정 seed(재현·run 분산). 비율은 여기 한 곳에서 조정. domained 면 기존 도메인
+    경로 그대로(byte-identical).
+    """
+    digest = hashlib.sha256(f"abstract:{run_id}".encode()).hexdigest()
+    return int(digest[:8], 16) % 3 != 0  # 2/3 abstract
 
 
 # composition 모드별 지령 (Phase 4 — P1/P2 수렴). single=합성 금지 / composed=합성 필수.
@@ -285,6 +297,9 @@ class AnthropicStrategistLLM:
                 "StrategySeed 기대"
             )
             raise TypeError(msg)
+        # 초급 abstract 선택(orthogonal) — domain 을 센티넬로 스탬프(narrative 가 맨 서술).
+        if is_basic(state.seed_algorithm) and _easy_abstract(state.run_id):
+            result = result.model_copy(update={"domain": ABSTRACT_DOMAIN})
         return result
 
 

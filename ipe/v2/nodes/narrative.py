@@ -19,6 +19,7 @@ from typing import Protocol
 from ipe.v1.schema import Narrative, NarrativeDraft
 
 from ..backbone import resolve_backbone
+from ..config import ABSTRACT_DOMAIN
 from ..state import V2State
 
 NARRATIVE_MODEL = "claude-sonnet-4-6"
@@ -88,6 +89,29 @@ typed NarrativeDraft (구조화된 tool call) 로 반환 — 제목과 scenario 
   따른다"). 동률 처리가 지문에 없으면 solver 가 해석을 강요받아 QA ambiguity
   게이트에서 reject 된다.
 """
+
+
+# 초급(easy track) abstract system prompt — domain==ABSTRACT_DOMAIN 일 때. 현실 도메인
+# 스토리 없이 변수(A,B,N)로 직접 서술. is_basic·P1(hidden=False) 전용이라 은닉 규율 불요.
+_ABSTRACT_SYSTEM_PROMPT = """\
+당신은 입문자용 코딩 문제 author 다. 동결된 ProblemBlueprint(입출력 형식+불변식)를 받아,
+**도메인 스토리 없이** 문제를 직접·추상적으로 서술한다 (입문 추상 모드).
+
+typed NarrativeDraft (구조화된 tool call) 로 반환:
+- title: 무엇을 구하는지 짧고 직접적으로 (예: '두 정수의 합', '최댓값 찾기', '조건을
+  만족하는 개수'). 현실 도메인 스토리 없이 연산 자체를 가리킨다.
+- scenario: 변수(A, B, N, 배열 원소 등)로 문제를 직접 서술한다. 현실 상황(은행·학교·물류
+  등)을 **지어내지 말 것** — 군더더기 없이 '무엇이 주어지고 무엇을 구하는지'만. 예:
+  "정수 A 와 B 가 주어진다. A 와 B 의 합을 구하라."
+
+규율:
+- **입출력 '형식' 서술 금지**: 입력의 줄 구성/순서/개수, 인덱싱 규약, 변수 나열식 형식
+  정의, 구체 입력/출력 예시 블록을 쓰지 말 것. 형식의 단일 진실원천은 이후 단계의 '입력
+  형식' 섹션·샘플 테스트케이스다. scenario 는 무엇을 구하는지 의미만(io_schema 는 참고용).
+- **풀이 방법('어떻게 푸는지') 서술 금지**: 무엇을 구하는지만 쓰고 알고리즘·자료구조·전략은
+  쓰지 않는다.
+- output_invariants 의 경계/퇴화 케이스 의미(있으면)는 서술한다 — 없는 케이스는 지어내지
+  말 것(초급은 대개 경계 의미가 단순하거나 없다)."""
 
 
 # back-route(B) 재진입 시 QA findings 렌더 바운드 — 지적 해소 방향 재작성을 유도하되
@@ -165,15 +189,30 @@ class AnthropicNarrativeLLM:
         from langchain_core.prompts import ChatPromptTemplate
 
         llm = ChatAnthropic(model_name=model, timeout=60, stop=None)
+        # 도메인 시나리오 체인 — 기존(byte-identical).
         prompt = ChatPromptTemplate.from_messages(
             [("system", _SYSTEM_PROMPT), ("user", "{user}")]
         )
         self._chain = (prompt | llm.with_structured_output(NarrativeDraft)).with_retry(
             stop_after_attempt=5, wait_exponential_jitter=True
         )
+        # 초급 abstract 체인 — domain==ABSTRACT_DOMAIN 일 때 스토리 없이 맨 서술.
+        abstract_prompt = ChatPromptTemplate.from_messages(
+            [("system", _ABSTRACT_SYSTEM_PROMPT), ("user", "{user}")]
+        )
+        self._chain_abstract = (
+            abstract_prompt | llm.with_structured_output(NarrativeDraft)
+        ).with_retry(stop_after_attempt=5, wait_exponential_jitter=True)
 
     def render(self, state: V2State, *, hidden: bool) -> NarrativeDraft:
-        result = self._chain.invoke({"user": _build_user_prompt(state, hidden=hidden)})
+        # 초급 abstract(domain 센티넬) → 맨 서술 체인, 그 외 → 도메인 시나리오(불변).
+        bp = state.blueprint
+        chain = (
+            self._chain_abstract
+            if bp is not None and bp.domain == ABSTRACT_DOMAIN
+            else self._chain
+        )
+        result = chain.invoke({"user": _build_user_prompt(state, hidden=hidden)})
         if not isinstance(result, NarrativeDraft):
             msg = (
                 f"with_structured_output 가 {type(result).__name__} 반환 — "

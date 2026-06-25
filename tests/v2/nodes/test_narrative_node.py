@@ -214,3 +214,14 @@ def test_narrative_user_prompt_includes_qa_feedback_on_routeback() -> None:
         }
     )
     assert "QA" not in _build_user_prompt(ok, hidden=True)  # 통과면 미포함
+
+
+def test_narrative_abstract_prompt_drops_domain_story() -> None:
+    """domain==ABSTRACT_DOMAIN 용 abstract system prompt — 스토리 없이 변수로 맨 서술
+    (초급 orthogonal abstract 선택, 스토리 군더더기 제거). 도메인 시나리오 prompt 와 구분."""
+    from ipe.v2.nodes.narrative import _ABSTRACT_SYSTEM_PROMPT, _SYSTEM_PROMPT
+
+    assert "도메인 스토리 없이" in _ABSTRACT_SYSTEM_PROMPT
+    assert "지어내지 말 것" in _ABSTRACT_SYSTEM_PROMPT  # 현실 상황 날조 금지
+    assert "A 와 B" in _ABSTRACT_SYSTEM_PROMPT  # 변수 직접 서술 예시
+    assert _ABSTRACT_SYSTEM_PROMPT != _SYSTEM_PROMPT  # 도메인 시나리오 prompt 와 다름

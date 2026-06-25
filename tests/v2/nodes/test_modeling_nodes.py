@@ -274,6 +274,31 @@ def test_formalizer_easy_system_prompt_drops_heavy_structure() -> None:
     assert "지어내지 말 것" in _EASY_SYSTEM_PROMPT  # 없는 N=0 케이스 날조 금지
 
 
+def test_easy_abstract_is_deterministic_and_mixes() -> None:
+    """초급 abstract/domained orthogonal 선택 — run_id 결정적 + 다수 run 에 둘 다 출현
+    (abstract 선호하되 도메인도 일부). 도메인 팔레트와 동형(sha256 안정 seed)."""
+    from ipe.v2.nodes.strategist import _easy_abstract
+
+    assert _easy_abstract("run-xyz") == _easy_abstract("run-xyz")  # 결정적
+    flags = [_easy_abstract(f"run-{i}") for i in range(120)]
+    assert any(flags) and not all(flags)  # 둘 다 출현(orthogonal mix)
+    assert sum(flags) / len(flags) > 0.5  # abstract 선호(~2/3)
+
+
+def test_formalizer_user_prompt_abstract_directive() -> None:
+    """domain==ABSTRACT_DOMAIN 이면 formalizer user prompt 에 추상 필드명 지령 주입 —
+    narrative abstract(N/P 변수)와 io_schema(필드명/출력형식) 정합. 불일치=QA reject 방지."""
+    from ipe.v2.config import ABSTRACT_DOMAIN
+    from ipe.v2.nodes.formalizer import _build_user_prompt
+
+    state = initial_v2_state("r", TargetAlgorithm.BASIC_IO).model_copy(
+        update={"strategy": _seed().model_copy(update={"domain": ABSTRACT_DOMAIN})}
+    )
+    prompt = _build_user_prompt(state)
+    assert "추상 모드" in prompt
+    assert "도메인 명칭 금지" in prompt
+
+
 def test_strategist_user_prompt_injects_palette() -> None:
     """node 가 user 프롬프트에 이번 run 팔레트를 주입 — LLM 이 그 안에서만 고름."""
     from ipe.v2.nodes.strategist import _build_user_prompt, _composition_palette

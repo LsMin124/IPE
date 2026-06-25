@@ -14,6 +14,7 @@ from typing import Protocol
 
 from ipe.v1.schema import BlueprintFormalization, ProblemBlueprint, is_basic
 
+from ..config import ABSTRACT_DOMAIN
 from ..state import V2State
 
 FORMALIZER_MODEL = "claude-opus-4-8"
@@ -176,6 +177,15 @@ def _build_user_prompt(state: V2State) -> str:
     ]
     if strategy.rationale:
         parts.append(f"rationale: {strategy.rationale}")
+    if strategy.domain == ABSTRACT_DOMAIN:
+        # 초급 abstract(orthogonal) — narrative 가 변수로 맨 서술하므로 io_schema 도
+        # 추상 필드명·출력형식으로 정합시킨다(quantity↔N 같은 불일치=QA reject 방지).
+        parts.append("")
+        parts.append(
+            "[추상 모드 — 도메인 스토리 없음]: io_schema 필드명을 추상 변수(A, B, N, P, "
+            "arr 등)로 두고, output_format 도 도메인 용어 없이 수학적으로 서술하라 "
+            "(quantity/price/balance 같은 도메인 명칭 금지). narrative 가 같은 변수로 서술한다."
+        )
     # back-route 재진입 — 직전 IR 검증 위반을 수선 지시로 (첫 pass 는 validation=None
     # 이라 빈 추가 = 메인 경로 prompt 불변). narrative 의 QA 피드백 패턴과 동일.
     validation = state.validation
