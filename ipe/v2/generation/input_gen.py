@@ -55,6 +55,8 @@ if TYPE_CHECKING:
     from ipe.v1.schema import (
         IOFieldSpec,
         IOSchema,
+        SequenceShape,
+        StringShape,
     )
 
 # 범위 미지정 시 기본값
@@ -62,6 +64,16 @@ _DEFAULT_SIZE = (1, 10)
 _DEFAULT_VALUE = (0, 100)
 _STRING_MIN_LEN = 1  # 빈 문자열 금지 (GeneratedTestCase.input_text min_length=1 보존)
 _ALPHABET = "abcdefghijklmnopqrstuvwxyz"
+
+# string_shape.alphabet → 실제 문자 풀 (StringBackbone 의미 사실과 짝, 이쪽은 직렬화 바이트).
+# lowercase 는 현 상수 _ALPHABET 와 동일 객체 → 미핀/lowercase 면 byte-identical.
+_ALPHABETS = {
+    "lowercase": _ALPHABET,
+    "uppercase": "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    "binary": "01",
+    "dna": "ACGT",
+    "alphanumeric": _ALPHABET + "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789",
+}
 
 # 단일 입력의 총 원소 수(배열 N·그래프 간선 E·행렬 R*C·문자열 길이) 상한. LLM contract
 # 가 V=200000 같은 상한을 줘도 결정론 클램프 — 패키지 비대화(케이스당 7.8MB·60케이스
@@ -122,6 +134,34 @@ def _structural_clause(field: IOFieldSpec) -> str:
     return ", ".join(parts)
 
 
+def _sequence_clause(shape: SequenceShape) -> str:
+    """int_array 정렬/중복 사실 prose (sequence_shape 단일 진실 투영). format prose 는
+    직렬화 바이트와 **드리프트 금지** 라 serializer 동거 — ``_serialize_int_array`` 가
+    같은 shape 를 READ 해 실제 정렬/distinct 배열을 방출한다(SequenceBackbone.
+    structural_facts 의 *의미* 사실과 짝, 이쪽은 *형식* 기술)."""
+    sort = {
+        "unsorted": "무정렬(임의 순서)",
+        "non_decreasing": "비내림차(오름차순) 정렬",
+        "strictly_increasing": "순증가 정렬(중복 없음)",
+    }[shape.sortedness]
+    if shape.sortedness == "strictly_increasing":
+        return sort  # distinct 함축 — 중복 절 생략
+    dup = "중복 값 가능" if shape.duplicates_allowed else "중복 값 없음(서로 다른 값)"
+    return f"{sort}, {dup}"
+
+
+def _string_clause(shape: StringShape) -> str:
+    """string 문자 집합 prose (string_shape 단일 진실 투영). format prose 는 직렬화 바이트와
+    드리프트 금지라 serializer 동거 — ``_string_alphabet`` 이 같은 alphabet 을 READ 한다."""
+    return {
+        "lowercase": "영소문자(a-z)",
+        "uppercase": "영대문자(A-Z)",
+        "binary": "이진(0/1)",
+        "dna": "DNA 염기(A,C,G,T)",
+        "alphanumeric": "영문자+숫자(a-zA-Z0-9)",
+    }[shape.alphabet]
+
+
 def _render_field(field: IOFieldSpec, indexing: int) -> str:
     if _is_reference(field):
         # 참조 스칼라 — 가리키는 collection 의 원소/정점 번호 (indexing base).
@@ -143,6 +183,13 @@ def _render_field(field: IOFieldSpec, indexing: int) -> str:
             f"{field.name}: 첫 줄에 정점 수 V, 이어서 V-1 줄에 {edge_line}. "
             f"정점 번호는 {_vertex_index_phrase(indexing)}, 트리(연결·무사이클) 보장."
         )
+    if field.type == "int_array" and field.sequence_shape is not None:
+        return (
+            f"{field.name}: {_FORMAT_TEXT['int_array']} "
+            f"{_sequence_clause(field.sequence_shape)}."
+        )
+    if field.type == "string" and field.string_shape is not None:
+        return f"{field.name}: 한 줄에 {_string_clause(field.string_shape)} 문자열."
     if field.type in ("int_matrix", "grid") and field.cols_range is not None:
         cr = field.cols_range
         cols = (
@@ -463,8 +510,8 @@ def derive_generator_contract(io_schema: IOSchema) -> GeneratorContract:
 # RFC §3.3/§6: io_schema 의 realizable-degeneracy 집합을 결정론 직렬화해 reconcile
 # differential 에 더한다. 골든들이 퇴화 입력에 합의 → 그 엣지 well-posed·출력 operational
 # 정의; 불합의 → 그 입력이 witness 인 ill-posed IR. 채점셋(generate_inputs)과 달리 **고정
-# seed**(canonical — IR 만의 함수, run 무관 재현). graph_shape 핀된 graph 만 backbone 이
-# 호출하므로(비-graph=NullBackbone) 실질 적용 대상은 graph 문제다.
+# seed**(canonical — IR 만의 함수, run 무관 재현). graph(graph_shape)·sequence(sequence_
+# shape)·string(string_shape) 백본이 호출; 어느 백본도 소유 안 한 타입은 NullBackbone=빈 튜플.
 _EDGE_SEED = 0
 
 
@@ -589,7 +636,8 @@ def _serialize_field(
     if t == "string":
         n = max(_pick_size(_size_bounds(field, tier_bound), bias, rng), _STRING_MIN_LEN)
         n = min(n, _MAX_ELEMENTS)  # 길이 캡
-        return "".join(rng.choice(_ALPHABET) for _ in range(n)), n
+        pool = _string_alphabet(field.string_shape)
+        return "".join(rng.choice(pool) for _ in range(n)), n
     if t == "int_array":
         return _serialize_int_array(field, tier_bound, rng, bias=bias)
     if t in ("int_matrix", "grid"):  # grid = int_matrix 와 동일 canonical 규약
@@ -628,8 +676,50 @@ def _serialize_int_array(
         return "0", 0
     n = min(n, _MAX_ELEMENTS)  # 원소 총량 캡 (패키지 비대화/생성 OOM 차단)
     lo, hi = _element_bounds(field)
-    vals = " ".join(str(rng.randint(lo, hi)) for _ in range(n))
-    return f"{n}\n{vals}", n  # 크기 = 원소 개수 N (참조 바인딩 대상)
+    values = _sequence_values(field.sequence_shape, n, lo, hi, rng)
+    vals = " ".join(str(v) for v in values)
+    return f"{len(values)}\n{vals}", len(values)  # 크기 = 원소 개수 N (참조 바인딩 대상)
+
+
+def _sequence_values(
+    shape: SequenceShape | None,
+    n: int,
+    lo: int,
+    hi: int,
+    rng: random.Random,
+) -> list[int]:
+    """int_array 원소값 — ``sequence_shape`` 의 sortedness/duplicates 를 honor (G1a).
+
+    - shape=None **또는** (unsorted·duplicates_allowed): 현 동작과 **동일 rng 추출**
+      순서/개수 → byte-identical 경로 (핀 안 했거나 현 상수와 동일하면 무변).
+    - distinct(strictly_increasing **또는** duplicates_allowed=False): 서로 다른 값을
+      표본추출. 범위가 n 보다 좁으면 범위 크기로 캡 — 실현가능성(같은 값 없이 n 개를
+      못 담으면 담을 수 있는 만큼만).
+    - 정렬 요구(non_decreasing/strictly_increasing): 추출 후 오름차순 정렬.
+
+    정렬/distinct 가 켜진 경로는 byte-identical 대상이 아니므로(핀된 의도적 변주) rng
+    추출 방식이 달라도 무방 — 고정 seed 면 여전히 결정론.
+    """
+    if shape is None or (shape.sortedness == "unsorted" and shape.duplicates_allowed):
+        return [rng.randint(lo, hi) for _ in range(n)]  # byte-identical 경로
+    distinct = shape.sortedness == "strictly_increasing" or not shape.duplicates_allowed
+    if distinct:
+        span = hi - lo + 1
+        values = rng.sample(range(lo, hi + 1), min(n, span))  # 서로 다른 값
+    else:
+        values = [rng.randint(lo, hi) for _ in range(n)]
+    if shape.sortedness in ("non_decreasing", "strictly_increasing"):
+        values.sort()
+    return values
+
+
+def _string_alphabet(shape: StringShape | None) -> str:
+    """string 필드 문자 풀 — ``string_shape.alphabet`` 을 honor (G2). None(미핀) 또는
+    lowercase 면 현 상수 ``_ALPHABET``(a-z) → byte-identical(같은 풀에서 같은 rng.choice).
+    """
+    if shape is None:
+        return _ALPHABET
+    return _ALPHABETS[shape.alphabet]
 
 
 def _cap_matrix(r: int, c: int) -> tuple[int, int]:

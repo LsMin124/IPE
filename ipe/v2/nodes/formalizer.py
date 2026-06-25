@@ -94,6 +94,26 @@ typed BlueprintFormalization (구조화된 tool call) 로 반환 — 형식 면�
   퇴화/경계 출력 의미(아래 규율)는 graph_shape 가 **실제 허용하는** 구조에 대해서만
   정의한다 — graph_shape 가 부정하는 구조(self_loops=false 면 자기 간선)의 처리 의미는
   적지 말 것(입력에 없어 narrative·채점셋과 모순돼 QA reject, N=18 실측).
+- **수열(int_array) 구조 사실은 `sequence_shape` 필드로 명시 결정한다** (graph_shape 의
+  수열판): prose 가 아니라 IOFieldSpec.sequence_shape 에 구조화해 emit 한다. 직렬화기가
+  이것을 단일 진실로 READ 해 실제 정렬/distinct 배열을 방출하고 narrative/QA/faithfulness
+  는 기계 비교로 검증한다.
+  - **sortedness** (필수 결정): 배열이 unsorted(무정렬)/non_decreasing(비내림차)/
+    strictly_increasing(순증가, 중복 없음) 중 무엇인지 **반드시 정한다**. binary_search 는
+    정렬 입력을 요구하는데 오늘날 어디에도 결정 안 돼, narrative 가 '정렬된 배열' 을 자유
+    서술하면 직렬화기의 무정렬 배열·golden 과 모순됐다(graph 의 directed 와 같은 잠재 모순).
+    알고리즘 의미로 판단한다 (이분탐색 대상 배열=정렬 필수, 그 외 대개 unsorted).
+  - **duplicates_allowed** (기본 true): 같은 값 중복 허용. two_sum 의 서로 다른 원소
+    같은 distinct 요구면 false. strictly_increasing 이면 자동 distinct 라 무의미.
+  비-int_array 필드엔 sequence_shape 를 두지 말 것.
+- **문자열(string) 구조 사실은 `string_shape` 필드로 명시 결정한다** (graph_shape 의
+  문자열판): IOFieldSpec.string_shape 에 구조화해 emit 한다. 직렬화기가 이 문자 집합에서만
+  문자를 뽑고 narrative/QA 가 기계 비교로 검증한다.
+  - **alphabet** (필수 결정): 문자 집합을 lowercase(a-z)/uppercase(A-Z)/binary(01)/
+    dna(ACGT)/alphanumeric(a-zA-Z0-9) 중 **반드시 정한다**. 오늘날 직렬화기는 a-z 만
+    방출하는데 narrative 가 'DNA 서열'·'이진 문자열' 을 자유 서술하면 golden·채점셋과
+    모순됐다. 도메인 의미로 판단한다 (유전체=dna, 비트열=binary, 일반 텍스트=lowercase).
+  비-string 필드엔 string_shape 를 두지 말 것.
 - io_schema 가 허용하는 **퇴화/경계 입력**의 출력 의미를 output_invariants 에
   명시적으로 **결정**해 둔다 (kind 예: edge_case_semantics): 시작==끝 같은 동일
   지점 케이스의 출력값, **도달 불가**·해 없음 케이스의 출력값(예: -1)과 그것이

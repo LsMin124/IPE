@@ -8,7 +8,7 @@ golden 을 각 퇴화 엣지 입력에 실행해 stdout 을 ``ResolvedEdgeCase.e
 
 reconcile(v2)이 이미 같은 퇴화 입력으로 골든들 합의(differential)를 통과시킨 뒤라 이 시점엔
 canonical 이 그 입력들을 성공 실행한다. 방어적으로 실행 실패한 엣지는 expected=None(pending)
-그대로 둔다(drop 아님 — 진단 보존). ``resolved_edges`` 가 비면(비-graph 등) no-op. 그래프상
+그대로 둔다(drop 아님 — 진단 보존). ``resolved_edges`` 가 비면(스칼라 only 등) no-op.
 reconcile 채택 경로 뒤에만 배선되므로 ``canonical_code`` 는 존재한다(방어적 None 가드).
 
 반환은 sample_filler(twin filler)와 동일하게 full ``V2State`` — partial dict 가 아니다. v2
@@ -39,13 +39,13 @@ def make_edge_filler_node(*, runner: CodeRunner) -> Callable[[V2State], V2State]
     """factory — reconcile canonical golden 으로 resolved_edges expected 채움. LLM 없음.
 
     실행 OK 인 엣지만 expected 를 채우고, 실패분은 pending(None) 유지(진단 보존).
-    reject 경로/비-graph(resolved_edges 빈) 면 방어적 no-op.
+    reject 경로/resolved_edges 빈(스칼라 only) 면 방어적 no-op.
     """
 
     def node(state: V2State) -> V2State:
         rec = state.reconciliation
         if rec is None or rec.canonical_code is None or not state.resolved_edges:
-            return state  # reject 경로/비-graph — 방어적 no-op
+            return state  # reject 경로/resolved_edges 빈 — 방어적 no-op
         golden = rec.canonical_code
         filled: list[ResolvedEdgeCase] = []
         for edge in state.resolved_edges:

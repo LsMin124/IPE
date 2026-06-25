@@ -89,7 +89,7 @@ def _build_user_prompt(state: V2State) -> str:
         f"io_schema.output_format: {bp.io_schema.output_format}",
         f"output_invariants: {invariants}",
     ]
-    if structural:  # graph 구조 사실 — narrative 가 이와 모순되면 distortion
+    if structural:  # backbone 구조 사실(graph/sequence) — narrative 가 모순되면 distortion
         parts.extend(["", "[구조 사실 — narrative 가 이와 모순되면 왜곡]", *structural])
     return "\n".join(parts)
 

@@ -143,7 +143,7 @@ def _build_user_prompt(state: V2State, *, hidden: bool) -> str:
         f"output_invariants: {invariants}",
     ]
     structural = resolve_backbone(bp.io_schema).structural_facts(bp.io_schema)
-    if structural:  # graph_shape 핀된 graph 필드만 — narrative 가 이 DATA 와 일치 서술
+    if structural:  # backbone 구조 사실(graph/sequence 핀된 필드) — narrative 일치 서술
         parts.extend(["", "[구조 사실 — 지문에 일치하게 서술 (모순 금지)]", *structural])
     feedback = _qa_feedback_lines(state)
     if feedback:

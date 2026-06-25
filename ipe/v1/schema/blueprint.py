@@ -75,6 +75,68 @@ class GraphShape(BaseModel):
     )
 
 
+class SequenceShape(BaseModel):
+    """int_array 필드의 **구조 사실** — 정렬성/중복 (정렬 잠재 모순 핀).
+
+    ``GraphShape`` 의 수열판 동형. graph 의 ``directed`` 는 같은 바이트(``u v w``)의
+    *의미 해석* 이라 byte-identical 하게 사실만 추가할 수 있었지만, 수열의 ``sortedness``
+    는 *바이트 자체가 다르다*(정렬 배열 ≠ 무정렬 배열). 오늘날 직렬화기는 무정렬·중복허용
+    배열만 방출(값 random)하고 narrative 는 '정렬된 배열' 을 자유 서술할 수 있어
+    binary_search 류는 golden·채점셋과 모순될 수 있다(F8 directedness 와 같은 잠재 모순).
+    sortedness 를 IR 필드로 끌어올리면 직렬화기가 이것을 **READ** 해 실제 정렬 배열을
+    방출하고 narrative/QA/faithfulness 가 prose 규칙이 아니라 **기계 비교** 로 검증한다.
+
+    기본값(``unsorted``·``duplicates_allowed=True``)은 현 직렬화기 동작과 **동일** →
+    sequence_shape 가 None 이거나 이 기본값이면 생성 바이트가 byte-identical. ``sortedness``
+    만은 binary_search 가 정렬 입력을 요구하는데 어디에도 결정 안 돼 있어 **필수** 로 핀한다.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    sortedness: Literal["unsorted", "non_decreasing", "strictly_increasing"] = Field(
+        ...,
+        description=(
+            "정렬 보장 (정렬 잠재 모순 핀). unsorted=무정렬(현 직렬화기 상수)/"
+            "non_decreasing=비내림차(중복 가능)/strictly_increasing=순증가(중복 없음). "
+            "binary_search 는 정렬 입력을 요구 → 반드시 명시. 오늘날 어디에도 결정 안 됨."
+        ),
+    )
+    duplicates_allowed: bool = Field(
+        default=True,
+        description=(
+            "같은 값 중복 허용 여부 (현 상수=True). strictly_increasing 이면 "
+            "암묵 False(순증가는 중복 불가)라 무의미."
+        ),
+    )
+
+
+class StringShape(BaseModel):
+    """string 필드의 **구조 사실** — 문자 집합(alphabet) (잠재 모순 핀).
+
+    ``GraphShape``/``SequenceShape`` 의 문자열판 동형. 오늘날 직렬화기는 영소문자 a-z 만
+    방출(``_ALPHABET`` 하드코딩)하고 narrative 는 'DNA 서열(ACGT)'·'이진 문자열(01)' 을
+    자유 서술할 수 있어 golden·채점셋과 모순될 수 있다(sequence ``sortedness`` 와 같은
+    byte-level 잠재 모순 — 문자 자체가 다르다). alphabet 를 IR 필드로 끌어올리면 직렬화기가
+    이것을 **READ** 해 실제 문자 집합을 방출하고 narrative/QA/faithfulness 가 기계 비교로
+    검증한다.
+
+    기본값 ``lowercase`` 는 현 직렬화기 상수(a-z)와 **동일** → string_shape 가 None 이거나
+    lowercase 면 생성 바이트가 byte-identical. ``empty`` 는 ``_STRING_MIN_LEN=1`` 강제로
+    실현 불가(graph connectivity-금지-unreachable 패턴 동형)라 alphabet 만 핀한다.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    alphabet: Literal["lowercase", "uppercase", "binary", "dna", "alphanumeric"] = Field(
+        ...,
+        description=(
+            "문자 집합 (잠재 모순 핀). lowercase=a-z(현 상수)/uppercase=A-Z/binary=01/"
+            "dna=ACGT/alphanumeric=a-zA-Z0-9. 직렬화기가 이 집합에서만 문자를 뽑는다 — "
+            "narrative 의 문자 집합 서술과 정합되도록 반드시 명시."
+        ),
+    )
+
+
 class IOFieldSpec(BaseModel):
     """입력 한 필드의 formal 명세 — 타입 + 크기/값 범위 (prose 아님)."""
 
@@ -114,6 +176,23 @@ class IOFieldSpec(BaseModel):
             "multi_edges/connectivity (F6~F8). None 이면 직렬화기가 현 상수(self-loop "
             "없음·다중간선 허용·연결 비보장)로 동작(byte-identical). 설정 시 직렬화기가 "
             "이것을 READ 하고 narrative/QA 가 기계 비교로 검증한다. 비-graph 필드엔 무의미."
+        ),
+    )
+    sequence_shape: SequenceShape | None = Field(
+        default=None,
+        description=(
+            "int_array 타입의 구조 사실 — sortedness/duplicates_allowed (정렬 잠재 모순 핀). "
+            "None 이면 직렬화기가 현 동작(무정렬·중복허용 random)으로 동작(byte-identical). "
+            "설정 시 직렬화기가 sortedness 를 READ 해 실제 정렬 배열을 방출하고 narrative/QA 가 "
+            "기계 비교로 검증한다. 비-int_array 필드엔 무의미."
+        ),
+    )
+    string_shape: StringShape | None = Field(
+        default=None,
+        description=(
+            "string 타입의 구조 사실 — alphabet(문자 집합) 잠재 모순 핀. None 이면 직렬화기가 "
+            "현 동작(영소문자 a-z)으로 동작(byte-identical). 설정 시 직렬화기가 READ 해 실제 "
+            "문자 집합을 방출하고 narrative/QA 가 기계 비교로 검증. 비-string 필드엔 무관."
         ),
     )
     description: str = ""
