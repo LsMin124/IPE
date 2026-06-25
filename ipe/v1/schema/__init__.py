@@ -29,6 +29,7 @@ from .problem_spec import (
     ProblemSpec,
     SampleTestCase,
     TargetAlgorithm,
+    is_basic,
 )
 from .qa import QAFinding, QAReport, QAReview, QAReviewerKind, QASeverity
 from .solution_attempt import Lesson, SolutionAttempt
@@ -98,6 +99,7 @@ __all__ = [
     "StructuredFeedback",
     "TargetAlgorithm",
     "TargetNode",
+    "is_basic",
     "TestSuite",
     "VerificationResult",
 ]

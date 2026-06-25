@@ -18,7 +18,7 @@ from collections import Counter
 from collections.abc import Callable
 from typing import Any, Protocol
 
-from ipe.v1.schema import QAReview, QAReviewerKind
+from ipe.v1.schema import QAReview, QAReviewerKind, is_basic
 
 from ..generation.input_gen import format_constraint
 from ..state import V2State
@@ -54,6 +54,17 @@ _CHARTERS: dict[QAReviewerKind, str] = {
         "범위 밖."
     ),
 }
+
+# 초급(is_basic) 문제 전용 완화 difficulty charter — 난이도-agnostic 원칙을 코드화.
+# 표준 charter 의 'trivial 하게 풀리거나' 가 입문 문제를 '쉽다'는 이유로 reject 하던 것
+# (단순 곱셈·분기 하나·엣지 적음)을 차단. **진짜 퇴화(상수출력/모순)만** blocker.
+_DIFFICULTY_CHARTER_EASY = (
+    "난이도 일관성 (초급 문제) — 이 문제는 **입문자용 기초 문제**다. 단순하고 쉬운 것은 "
+    "**결함이 아니다**(의도된 난이도). '너무 쉽다/단순하다/한 연산으로 풀린다/엣지 케이스가 "
+    "적다'는 이유로 막지 말 것. **오직 진짜 퇴화만** blocker 로 본다: 입력과 무관한 상수 "
+    "출력(어떤 입력이든 같은 답), 명세상 불가능하거나 자기모순인 요구. 그 외 단순함은 "
+    "통과시킨다. 난이도 측정/calibration 은 범위 밖."
+)
 
 _SYSTEM_PROMPT_TEMPLATE = """\
 당신은 코딩테스트 문제 패키지의 QA 리뷰어다. 당신의 관점:
@@ -131,6 +142,7 @@ class AnthropicQAReviewerLLM:
         from langchain_anthropic import ChatAnthropic
         from langchain_core.prompts import ChatPromptTemplate
 
+        self._kind = kind
         llm = ChatAnthropic(model_name=model, timeout=60, stop=None)
         system = _SYSTEM_PROMPT_TEMPLATE.format(charter=_CHARTERS[kind], kind=kind)
         prompt = ChatPromptTemplate.from_messages(
@@ -139,9 +151,27 @@ class AnthropicQAReviewerLLM:
         self._chain = (prompt | llm.with_structured_output(QAReview)).with_retry(
             stop_after_attempt=5, wait_exponential_jitter=True
         )
+        # difficulty kind 전용 초급 완화 charter 체인 — review 시 is_basic 이면 사용.
+        # 다른 kind 는 표준 charter 그대로(동일 체인, 미사용) → byte-identical.
+        easy_charter = (
+            _DIFFICULTY_CHARTER_EASY if kind == "difficulty" else _CHARTERS[kind]
+        )
+        easy_system = _SYSTEM_PROMPT_TEMPLATE.format(charter=easy_charter, kind=kind)
+        easy_prompt = ChatPromptTemplate.from_messages(
+            [("system", easy_system), ("user", "{user}")]
+        )
+        self._chain_easy = (
+            easy_prompt | llm.with_structured_output(QAReview)
+        ).with_retry(stop_after_attempt=5, wait_exponential_jitter=True)
 
     def review(self, state: V2State, *, kind: QAReviewerKind) -> QAReview:
-        result = self._chain.invoke({"user": _build_user_prompt(state)})
+        # 초급(is_basic) + difficulty kind 만 완화 charter — '쉽다'고 막지 않는다.
+        chain = (
+            self._chain_easy
+            if self._kind == "difficulty" and is_basic(state.seed_algorithm)
+            else self._chain
+        )
+        result = chain.invoke({"user": _build_user_prompt(state)})
         if not isinstance(result, QAReview):
             msg = (
                 f"with_structured_output 가 {type(result).__name__} 반환 — "

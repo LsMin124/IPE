@@ -21,7 +21,7 @@ import random
 from collections.abc import Callable
 from typing import Literal, Protocol
 
-from ipe.v1.schema import StrategySeed, TargetAlgorithm
+from ipe.v1.schema import StrategySeed, TargetAlgorithm, is_basic
 
 from ..state import V2State
 
@@ -49,7 +49,11 @@ def _composition_palette(run_id: str, reduction_core: TargetAlgorithm) -> list[s
     """
     digest = hashlib.sha256(run_id.encode("utf-8")).hexdigest()
     rng = random.Random(int(digest[:16], 16))
-    candidates = [a.value for a in TargetAlgorithm if a != reduction_core]
+    candidates = [
+        a.value
+        for a in TargetAlgorithm
+        if a != reduction_core and not is_basic(a)
+    ]
     rng.shuffle(candidates)
     return sorted(candidates[:_COMPOSITION_PALETTE_SIZE])
 
@@ -126,6 +130,29 @@ composition 다양성 (유출 게이트 실측 반영 — 어휘 mode-collapse �
   쓰지 않는다."""
 
 
+# 초급(easy track) system prompt — is_basic(seed) 일 때 사용. 알고리즘 은닉/위장이
+# 아니라 **명확·직접 서술**이 목표. composition 항상 빈값(단일 기초 스킬). 입력 의존
+# 출력 강제(상수 출력=퇴화 → difficulty 게이트 reject). 난이도=seed 파생(단일소스).
+_EASY_SYSTEM_PROMPT = """\
+당신은 입문자용 코딩 문제 strategist 다. 주어진 기초 카테고리(기본 입출력·산술/논리·
+조건 분기·반복 누적)를 받아, **명확하고 직접적인** 입문 문제의 전략 시드를 설계한다.
+**은닉·위장이 목표가 아니다** — 풀이자가 무엇을 해야 하는지 지문에서 바로 알 수 있어야 한다.
+
+typed StrategySeed (구조화된 tool call) 로 반환:
+- reduction_core: 주어진 기초 카테고리를 **그대로** 둔다 (숨기거나 다른 것으로 환원 금지).
+- composition: **반드시 빈 list**. 입문 문제는 단일 기초 스킬만 다룬다 (합성 금지).
+- domain: 입출력이 자연스럽게 읽히도록 돕는 **가벼운 현실 소재** (위장이 아니라 명확성 보조).
+  **반드시 user 메시지의 '도메인 팔레트(이번 run)' 안에서** 고른다.
+- rationale: 이 소재가 기초 스킬을 어떻게 명확히 드러내는지 한 줄.
+
+핵심 목표 (명확성·평이함): 작은 입력, 한눈에 드러나는 요구. 알고리즘 지식이 필요 없고
+입력을 읽어 간단한 산술/조건/반복으로 계산해 출력하는 수준이어야 한다. 출력은 반드시
+**입력에 의존**해야 한다 — 입력과 무관한 상수 출력은 금지(퇴화 문제가 되어 reject 된다).
+입력을 **그대로 되출력**(가공 없는 단순 echo)하는 것도 너무 자명해 reject 되니, 기초
+입출력이라도 **최소한의 계산·판정·변환**(합·차·비교·개수·간단한 포맷 변환 등)을 반드시
+하나는 포함해 풀이자가 '읽고 무언가 한 가지를 계산'하게 만든다."""
+
+
 def _system_prompt(composition_mode: CompositionMode) -> str:
     """composition_mode 별 system prompt — single=합성 금지 / composed=합성 필수.
 
@@ -191,6 +218,20 @@ def _build_user_prompt(state: V2State, composition_mode: CompositionMode) -> str
     return "\n".join(lines)
 
 
+def _easy_user_prompt(state: V2State) -> str:
+    """초급(easy) user prompt — 기초 카테고리 + 도메인 팔레트 (합성 팔레트 없음)."""
+    dom_palette = _domain_palette(state.run_id)
+    return "\n".join(
+        [
+            f"기초 카테고리: {state.seed_algorithm.value}",
+            f"run_id: {state.run_id}",
+            "",
+            "도메인 팔레트 (이번 run — domain 은 이 안에서 고른다):",
+            ", ".join(dom_palette),
+        ]
+    )
+
+
 class StrategistLLM(Protocol):
     """Strategist 의 LLM dependency. test 가 mock 주입."""
 
@@ -215,17 +256,29 @@ class AnthropicStrategistLLM:
 
         self._composition_mode = composition_mode
         llm = ChatAnthropic(model_name=model, timeout=60, stop=None)
+        # 알고리즘(은닉/합성) 체인 — 비-basic seed. 기존과 동일(byte-identical).
         prompt = ChatPromptTemplate.from_messages(
             [("system", _system_prompt(composition_mode)), ("user", "{user}")]
         )
         self._chain = (prompt | llm.with_structured_output(StrategySeed)).with_retry(
             stop_after_attempt=5, wait_exponential_jitter=True
         )
+        # 초급(명확) 체인 — is_basic seed. 은닉 대신 명확·직접 저작.
+        easy_prompt = ChatPromptTemplate.from_messages(
+            [("system", _EASY_SYSTEM_PROMPT), ("user", "{user}")]
+        )
+        self._chain_easy = (
+            easy_prompt | llm.with_structured_output(StrategySeed)
+        ).with_retry(stop_after_attempt=5, wait_exponential_jitter=True)
 
     def seed(self, state: V2State) -> StrategySeed:
-        result = self._chain.invoke(
-            {"user": _build_user_prompt(state, self._composition_mode)}
-        )
+        # 난이도는 seed 에서 파생(단일소스) — is_basic 이면 초급 명확 저작 경로.
+        if is_basic(state.seed_algorithm):
+            result = self._chain_easy.invoke({"user": _easy_user_prompt(state)})
+        else:
+            result = self._chain.invoke(
+                {"user": _build_user_prompt(state, self._composition_mode)}
+            )
         if not isinstance(result, StrategySeed):
             msg = (
                 f"with_structured_output 가 {type(result).__name__} 반환 — "

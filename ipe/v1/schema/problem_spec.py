@@ -43,6 +43,35 @@ class TargetAlgorithm(StrEnum):
     HEAP = "heap"
     FENWICK = "fenwick"
     COIN_CHANGE = "coin_change"
+    # 초급 카테고리 (easy track) — 알고리즘이 아니라 기초 스킬. is_basic() 으로 분류,
+    # strategist/formalizer 가 은닉/위장 대신 명확·직접 저작으로 분기. 난이도는 별도
+    # 입력이 아니라 seed 에서 파생(단일소스). symbolic verifier 는 None-dispatch
+    # (golden/brute reconcile 가 검증). 입력은 스칼라/소형 배열이라 NullBackbone.
+    BASIC_IO = "basic_io"
+    ARITHMETIC = "arithmetic"
+    CONDITIONAL = "conditional"
+    LOOP_ACCUMULATE = "loop_accumulate"
+
+
+# 초급 카테고리 단일소스 — easy 저작 분기의 진실. 별도 difficulty 입력 없이 seed 가
+# 난이도를 말한다(모순 불가: "easy dijkstra"/"hard basic_io" 상태가 안 생김).
+_BASIC_TARGETS: frozenset[TargetAlgorithm] = frozenset(
+    {
+        TargetAlgorithm.BASIC_IO,
+        TargetAlgorithm.ARITHMETIC,
+        TargetAlgorithm.CONDITIONAL,
+        TargetAlgorithm.LOOP_ACCUMULATE,
+    }
+)
+
+
+def is_basic(target: TargetAlgorithm) -> bool:
+    """초급 카테고리(기초 스킬)인가 — easy 저작 분기 신호.
+
+    True 면 strategist/formalizer 가 은닉/위장 대신 명확·직접 서술 + 작은 입력으로
+    저작한다. 난이도를 별도 입력으로 받지 않고 seed 에서 파생(단일소스·모순 불가).
+    """
+    return target in _BASIC_TARGETS
 
 
 class ConstraintRange(BaseModel):

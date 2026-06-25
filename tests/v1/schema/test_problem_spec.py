@@ -11,6 +11,7 @@ from ipe.v1.schema import (
     ProblemSpec,
     SampleTestCase,
     TargetAlgorithm,
+    is_basic,
 )
 
 
@@ -127,3 +128,46 @@ def test_problem_spec_target_algorithm_accepts_enum_value_str() -> None:
     base["target_algorithm"] = "dijkstra"
     spec = ProblemSpec.model_validate(base)
     assert spec.target_algorithm is TargetAlgorithm.DIJKSTRA
+
+
+# --- 초급 카테고리 분류 (easy track E2a) --------------------------------------
+
+
+def test_basic_targets_are_valid_target_algorithm_members() -> None:
+    """초급 카테고리도 TargetAlgorithm StrEnum 멤버 — seed 어휘 단일 유지(Option A)."""
+    assert TargetAlgorithm("basic_io") is TargetAlgorithm.BASIC_IO
+    assert TargetAlgorithm.ARITHMETIC.value == "arithmetic"
+    assert TargetAlgorithm.CONDITIONAL.value == "conditional"
+    assert TargetAlgorithm.LOOP_ACCUMULATE.value == "loop_accumulate"
+
+
+def test_is_basic_true_for_beginner_categories() -> None:
+    """초급 카테고리는 is_basic True (easy 저작 분기 신호 — 단일소스)."""
+    for target in (
+        TargetAlgorithm.BASIC_IO,
+        TargetAlgorithm.ARITHMETIC,
+        TargetAlgorithm.CONDITIONAL,
+        TargetAlgorithm.LOOP_ACCUMULATE,
+    ):
+        assert is_basic(target) is True
+
+
+def test_is_basic_false_for_algorithm_categories() -> None:
+    """알고리즘 카테고리는 is_basic False — standard 저작(byte-identical)."""
+    for target in (
+        TargetAlgorithm.DIJKSTRA,
+        TargetAlgorithm.SORT,
+        TargetAlgorithm.BINARY_SEARCH,
+        TargetAlgorithm.SEGTREE,
+        TargetAlgorithm.STRING_MATCH,
+        TargetAlgorithm.KNAPSACK,
+    ):
+        assert is_basic(target) is False
+
+
+def test_problem_spec_constructs_with_basic_target() -> None:
+    """초급 카테고리도 ProblemSpec 의 valid target_algorithm (파이프라인 단일 어휘)."""
+    base = _valid_spec().model_dump()
+    base["target_algorithm"] = "basic_io"
+    spec = ProblemSpec.model_validate(base)
+    assert spec.target_algorithm is TargetAlgorithm.BASIC_IO

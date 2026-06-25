@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Protocol
 
-from ipe.v1.schema import BlueprintFormalization, ProblemBlueprint
+from ipe.v1.schema import BlueprintFormalization, ProblemBlueprint, is_basic
 
 from ..state import V2State
 
@@ -133,6 +133,37 @@ typed BlueprintFormalization (구조화된 tool call) 로 반환 — 형식 면�
 """
 
 
+# 초급(easy track) formalizer system prompt — is_basic(seed) 일 때. 무거운 graph_shape/
+# sequence_shape/edge_case_semantics/tie-break 머신을 **뺀** 단순 계약: 작은 입력·스칼라
+# 또는 단순 배열·단순 출력·입력 의존. (알고리즘 경로의 그 머신이 binary_search/lis 의
+# 'N=0↔constraints'·sortedness 모순을 만든 표면 — 초급엔 불필요하고 위험.)
+_EASY_SYSTEM_PROMPT = """\
+당신은 입문자용 코딩 문제 formalizer 다. 기초 카테고리(기본 입출력·산술/논리·조건 분기·
+반복 누적)의 전략 시드를 받아, **간단하고 명확한** 입출력 형식 계약을 동결한다.
+
+typed BlueprintFormalization (구조화된 tool call) 로 반환 — 형식 면만:
+- io_schema:
+  - inputs: 각 필드의 IOFieldSpec. type 은 대개 int 또는 int_array (필요시 string).
+    크기·값 범위를 ConstraintRange 로 명시하되 **작게** 잡는다(입문 난이도): 스칼라 int 는
+    보통 [1, 1000], 산술은 [-1000000000, 1000000000], 배열 size 는 [1, 100] 수준.
+    거대한 N(수만~수십만)을 쓰지 말 것 — 입문은 작은 입력이다.
+  - output_type: int / int_array / bool / string / yes_no 중 **가장 단순한** 것.
+  - output_format: 출력 인쇄 형식 (한 줄 설명).
+- output_invariants: 출력이 항상 만족하는 간단한 관계 0~1개면 충분(예: non_negative).
+
+규율 (입문 평이함 — 알고리즘 구조 배제):
+- 알고리즘/도메인을 재결정하지 말 것 — 시드의 reduction_core/domain 은 그대로 유지.
+- **작고 단순하게**: 입력 필드 1~3개, 구조는 최소(스칼라 또는 단순 1차원 배열). graph/
+  matrix/grid 같은 복잡 구조와 graph_shape/sequence_shape/string_shape 핀을 **쓰지 말 것**
+  — 기초 입출력·산술·조건·반복은 그런 구조가 필요 없다.
+- **출력은 반드시 입력에 의존**한다 — 입력과 무관한 상수 출력 금지(퇴화 → difficulty reject).
+- 입력을 읽어 간단히 계산(합·차·비교·카운트·누적)해 출력하는 수준. 정렬·이분탐색·그래프
+  같은 알고리즘을 끌어들이지 말 것(끌어들이면 입문이 아니다).
+- 퇴화/경계 입력의 특별 처리(빈 입력·N=0 등)를 **지어내지 말 것** — constraints 가 허용하는
+  범위만 다루면 충분하다(없는 케이스를 서술하면 constraints 와 모순돼 reject 된다).
+- collection 필드(int_array)는 자기 크기 헤더를 자체 포함한다(별도 개수 스칼라 추가 금지)."""
+
+
 def _build_user_prompt(state: V2State) -> str:
     strategy = state.strategy
     if strategy is None:
@@ -171,15 +202,25 @@ class AnthropicFormalizerLLM:
         from langchain_core.prompts import ChatPromptTemplate
 
         llm = ChatAnthropic(model_name=model, timeout=60, stop=None)
+        # 알고리즘(정밀 구조) 체인 — 비-basic seed. 기존과 동일(byte-identical).
         prompt = ChatPromptTemplate.from_messages(
             [("system", _SYSTEM_PROMPT), ("user", "{user}")]
         )
         self._chain = (
             prompt | llm.with_structured_output(BlueprintFormalization)
         ).with_retry(stop_after_attempt=5, wait_exponential_jitter=True)
+        # 초급(단순) 체인 — is_basic seed. 무거운 구조 머신 배제(N=0/sortedness 모순 표면 제거).
+        easy_prompt = ChatPromptTemplate.from_messages(
+            [("system", _EASY_SYSTEM_PROMPT), ("user", "{user}")]
+        )
+        self._chain_easy = (
+            easy_prompt | llm.with_structured_output(BlueprintFormalization)
+        ).with_retry(stop_after_attempt=5, wait_exponential_jitter=True)
 
     def formalize(self, state: V2State) -> BlueprintFormalization:
-        result = self._chain.invoke({"user": _build_user_prompt(state)})
+        # 난이도는 seed 에서 파생(단일소스) — is_basic 이면 단순 형식 계약 경로.
+        chain = self._chain_easy if is_basic(state.seed_algorithm) else self._chain
+        result = chain.invoke({"user": _build_user_prompt(state)})
         if not isinstance(result, BlueprintFormalization):
             msg = (
                 f"with_structured_output 가 {type(result).__name__} 반환 — "

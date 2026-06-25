@@ -117,3 +117,14 @@ def test_factory_builds_all_four_kinds() -> None:
         )
         out = node(_package_state())
         assert out["qa_reviews"][0].kind == kind
+
+
+def test_easy_difficulty_charter_does_not_block_simplicity() -> None:
+    """초급(is_basic) 완화 difficulty charter — '쉽다'는 이유로 막지 않고 진짜 퇴화만
+    blocker. RFC 난이도-agnostic 원칙을 코드화. 표준 charter 와 구분(완화 적용)."""
+    from ipe.v2.nodes.qa_reviewer import _CHARTERS, _DIFFICULTY_CHARTER_EASY
+
+    assert "결함이 아니다" in _DIFFICULTY_CHARTER_EASY  # 단순함은 결함 아님
+    assert "막지 말 것" in _DIFFICULTY_CHARTER_EASY  # '쉽다'고 막지 않음
+    assert "상수" in _DIFFICULTY_CHARTER_EASY  # 진짜 퇴화(상수출력)는 여전히 차단
+    assert _CHARTERS["difficulty"] != _DIFFICULTY_CHARTER_EASY  # 표준과 다름

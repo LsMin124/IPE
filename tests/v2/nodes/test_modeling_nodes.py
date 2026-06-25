@@ -20,6 +20,7 @@ from ipe.v1.schema import (
     ProblemBlueprint,
     StrategySeed,
     TargetAlgorithm,
+    is_basic,
 )
 from ipe.v2.nodes import make_formalizer_node, make_strategist_node
 from ipe.v2.state import V2State, initial_v2_state
@@ -222,11 +223,55 @@ def test_composition_palette_rotates_and_spreads_vocabulary() -> None:
             counter[v] += 1
     # 다른 run_id 는 다른 팔레트를 만든다(고정 아님)
     assert _composition_palette("run-0", core) != _composition_palette("run-1", core)
-    # core(dijkstra) 외 18종 전부 제안됨 (사각지대 없음)
-    assert len(counter) == len(TargetAlgorithm) - 1
+    # core(dijkstra) 외 non-basic 전부 제안됨 (basic 카테고리는 합성 후보서 제외)
+    non_basic = [a for a in TargetAlgorithm if not is_basic(a)]
+    assert len(counter) == len(non_basic) - 1
     # 어느 기법도 과점하지 않음 — 균등 기대 ~7/18=38.9%, 상한 55% 로 여유 가드
     top_share = counter.most_common(1)[0][1] / runs
     assert top_share < 0.55
+
+
+def test_composition_palette_excludes_basic_categories() -> None:
+    """easy 카테고리(basic_io 등)는 합성 후보 팔레트에서 제외 — P2 합성 문제가
+    기초 스킬과 합성하는 무의미한 조합 차단(어휘는 단일이되 합성 공간은 알고리즘만)."""
+    from ipe.v2.nodes.strategist import _composition_palette
+
+    for i in range(60):
+        for v in _composition_palette(f"run-{i}", TargetAlgorithm.DIJKSTRA):
+            assert not is_basic(TargetAlgorithm(v))
+
+
+def test_strategist_easy_system_prompt_is_clarity_framed() -> None:
+    """is_basic seed 용 easy system prompt — 은닉이 아니라 명확·직접·단일·입력의존."""
+    from ipe.v2.nodes.strategist import _EASY_SYSTEM_PROMPT
+
+    assert "은닉·위장이 목표가 아니다" in _EASY_SYSTEM_PROMPT
+    assert "명확" in _EASY_SYSTEM_PROMPT
+    assert "빈 list" in _EASY_SYSTEM_PROMPT  # composition 강제 빈값(단일)
+    assert "상수 출력은 금지" in _EASY_SYSTEM_PROMPT  # 입력의존(퇴화 방어, R1)
+    assert "최소한의 계산" in _EASY_SYSTEM_PROMPT  # 순수 echo 금지(triviality 바닥)
+
+
+def test_strategist_easy_user_prompt_injects_domain_only() -> None:
+    """easy user prompt — 기초 카테고리 + 도메인 팔레트만(합성 팔레트 없음)."""
+    from ipe.v2.nodes.strategist import _easy_user_prompt
+
+    state = initial_v2_state("run-easy", TargetAlgorithm.BASIC_IO)
+    prompt = _easy_user_prompt(state)
+    assert "기초 카테고리: basic_io" in prompt
+    assert "도메인 팔레트" in prompt
+    assert "합성 후보 팔레트" not in prompt  # 단일 — 합성 없음
+
+
+def test_formalizer_easy_system_prompt_drops_heavy_structure() -> None:
+    """is_basic seed 용 formalizer easy prompt — 작은 입력·단순 구조·입력의존,
+    graph_shape/sequence_shape 같은 무거운 머신 배제(N=0/sortedness 모순 표면 제거)."""
+    from ipe.v2.nodes.formalizer import _EASY_SYSTEM_PROMPT
+
+    assert "작게" in _EASY_SYSTEM_PROMPT  # 작은 입력 범위
+    assert "쓰지 말 것" in _EASY_SYSTEM_PROMPT  # graph_shape/sequence_shape 배제
+    assert "상수 출력 금지" in _EASY_SYSTEM_PROMPT  # 입력의존(R1)
+    assert "지어내지 말 것" in _EASY_SYSTEM_PROMPT  # 없는 N=0 케이스 날조 금지
 
 
 def test_strategist_user_prompt_injects_palette() -> None:
