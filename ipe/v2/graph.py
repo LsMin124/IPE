@@ -6,7 +6,8 @@ production 모드 다 full 검증). 모드 차이는 4 노브 (caller 가 조합
     노브               P1 (단일·공개)                   P2 (합성·은닉)
     hidden             False                            True
     composition_mode   "single" (composition 빈값)      "composed" (≥1, 총 2개+)
-    qa_kinds           (ambiguity,fairness,difficulty)  +leakage (4종)
+    qa_kinds           (ambiguity,fairness,difficulty,  +leakage (5종)
+                        presentation — 4종)
     seed_algorithm     고정 공개 타겟                   힌트
 
 기본 흐름 (always)::
@@ -21,6 +22,8 @@ production 모드 다 full 검증). 모드 차이는 4 노브 (caller 가 조합
       reconciler ─(채택)→ synth_bridge → sample_filler → edge_filler → executor ─(pass)→ suite/qa
        (sample+퇴화엣지 diff)        (golden→expected 채움)        └(fail)→ end_verification
       reconciler ─(reject)→ end_synthesis_rejected
+    ``with_sample_explanations=True`` 면 sample_filler → **sample_explainer**(BOJ 예제
+    설명 저작, Sonnet) → edge_filler 로 배선 (False 면 기존 경로 불변)
 
 ``with_test_suite=True`` (M4 풀 채점셋 — verification 통과 후)::
 
@@ -74,6 +77,7 @@ from .nodes import (
     FormalizerLLM,
     NarrativeLLM,
     QAReviewerLLM,
+    SampleExplainerLLM,
     StrategistLLM,
     make_edge_filler_node,
     make_faithfulness_node,
@@ -83,6 +87,7 @@ from .nodes import (
     make_narrative_node,
     make_qa_aggregator_node,
     make_qa_reviewer_node,
+    make_sample_explainer_node,
     make_sample_filler_node,
     make_spec_bridge_node,
     make_spec_patch_node,
@@ -236,7 +241,10 @@ def build_v2_graph(
         "fairness",
         "leakage",
         "difficulty",
+        "presentation",
     ),
+    sample_explainer_llm: SampleExplainerLLM | None = None,
+    with_sample_explanations: bool = False,
 ) -> CompiledStateGraph:  # type: ignore[type-arg]
     """v2 그래프 빌드. None dependency 는 production default(Anthropic/sandbox/verifier).
 
@@ -246,8 +254,11 @@ def build_v2_graph(
     =True``(M4) 면 verification 통과 후 generator_designer→input_generator→
     suite_assembler 로 풀 채점셋까지. ``with_qa=True``(M5) 면 suite 완성 후 ``qa_kinds``
     리뷰어 병렬 게이트 — 완성 패키지를 검토하므로 ``with_test_suite=True`` 필수.
-    ``qa_kinds`` = 돌릴 QA 관점(P1=ambiguity/fairness/difficulty 3종 / P2=+leakage 4종).
+    ``qa_kinds`` = 돌릴 QA 관점(P1=ambiguity/fairness/difficulty/presentation 4종 /
+    P2=+leakage 5종).
     ``qa_reviewer_llms`` 는 kind→LLM, 누락 kind 는 production Haiku. test 는 LLM mock 주입.
+    ``with_sample_explanations=True`` 면 sample_filler 뒤에 sample_explainer(BOJ 예제
+    설명 저작, Sonnet)를 배선 — ``sample_explainer_llm`` None 은 production Sonnet.
     """
     if with_qa and not with_test_suite:
         msg = "with_qa=True 는 with_test_suite=True 필수 (완성 패키지를 검토)"
@@ -342,6 +353,8 @@ def build_v2_graph(
         narrative_llm=narrative_llm,
         faithfulness_llm=faithfulness_llm,
         hidden=hidden,
+        sample_explainer_llm=sample_explainer_llm,
+        with_sample_explanations=with_sample_explanations,
     )
 
     return builder.compile()
@@ -365,10 +378,13 @@ def _wire_synthesis(
         "fairness",
         "leakage",
         "difficulty",
+        "presentation",
     ),
     narrative_llm: NarrativeLLM | None = None,
     faithfulness_llm: FaithfulnessLLM | None = None,
     hidden: bool = True,
+    sample_explainer_llm: SampleExplainerLLM | None = None,
+    with_sample_explanations: bool = False,
 ) -> None:
     """synthesis 서브그래프 — spec_bridge→designer→fan-out→reconcile→bridge→executor.
 
@@ -376,6 +392,8 @@ def _wire_synthesis(
     ``with_test_suite=True`` 면 executor 통과 후 M4 채점셋 3 노드를 거쳐 end_success,
     ``with_qa=True`` 면 그 뒤 ``qa_kinds`` 병렬 게이트(M5)까지. ``narrative_llm``/
     ``faithfulness_llm``/``hidden`` 은 QA back-route(B)의 revise 경로용 passthrough.
+    ``with_sample_explanations=True`` 면 sample_filler→sample_explainer→edge_filler
+    (BOJ 예제 설명 저작, synthesis 경로 +1 step), False 면 기존 경로 불변.
     """
     if not golden_llms or brute_llm is None:
         msg = "synthesis 배선은 golden_llms(>=1) + brute_llm 필수"
@@ -475,7 +493,19 @@ def _wire_synthesis(
         ),
     )
     builder.add_edge("synth_bridge", "sample_filler")
-    builder.add_edge("sample_filler", "edge_filler")
+    if with_sample_explanations:
+        # sample_explainer — 완성 샘플(golden 확정 expected)에 BOJ 표준 '예제 설명'
+        # 저작 (W2B). sample_filler(expected 확정) 직후가 유일한 안전 저작 지점.
+        # LLM 예외 시 무변경 통과(장식적 품질 채널 — 노드 docstring) → 배선해도
+        # 파이프라인 실패 클래스는 늘지 않는다.
+        builder.add_node(
+            "sample_explainer",
+            cast(Any, make_sample_explainer_node(sample_explainer_llm)),
+        )
+        builder.add_edge("sample_filler", "sample_explainer")
+        builder.add_edge("sample_explainer", "edge_filler")
+    else:
+        builder.add_edge("sample_filler", "edge_filler")
     builder.add_edge("edge_filler", "executor")
     # 검증 통과 시: 채점셋 생성(M4) 또는 즉시 success
     pass_target = "generator_designer" if with_test_suite else "end_success"

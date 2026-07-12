@@ -8,6 +8,17 @@
 ``derive_generator_contract`` 가 sized 필드 size_range 를 log-spaced scale tier 로,
 실현가능 퇴화를 edge case 로 결정론 파생한다. 효과 = Opus 호출 1 삭제 + unrealizable
 fail_qa → 0. 계약이 io_schema 의 함수이므로 다른 투영과 모순 불가(consistency-by-construction).
+
+suite 구성 계획 (상용 저지 케이스 강도): boundary/퇴화(min_size/max_size/empty/
+disconnected — 기존 유지) 위에 adversarial 아키타입을 각 1개 이상 얹는다 — graph:
+path_chain/star/dense/cycle_heavy/duplicate_edges/equal_weights/extreme_weights,
+sequence: sorted_asc/sorted_desc/all_equal/alternating/single_element/extreme_values,
+string: all_same_char/periodic. ``max_stress`` 가 max_size 와 별도로 상한을 한 번 더
+때려 진짜 상한(naive TLE 유도) 케이스를 최소 2개 보장한다. 전부 shape 핀
+(sortedness/duplicates/multi_edges/connectivity) 존중 + 규모 게이트
+(``input_gen._ADVERSARIAL_MIN_SIZE`` — 소규모 스키마는 기존 집합 그대로, 대형 케이스
+추가 비용은 max_stress 1개뿐). 파생 로직은 ``input_gen._derive_adversarial_edges``
+단일 소스 (이 노드는 여전히 순수 위임 — F18 카테고리명↔입력 정합 불변).
 """
 
 from __future__ import annotations

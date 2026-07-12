@@ -42,6 +42,33 @@ prev verification.feedback 가 있으면:
 """
 
 
+# brute(검산자) 전용 system prompt — golden 과의 **프롬프트 격리**가 목적 (W2A).
+# P2(합성·은닉)는 symbolic verifier off → golden×K vs brute reconcile 합의가 유일한
+# 정답성 게이트인데, brute 가 golden 과 동일 prompt + 동일 AlgorithmDesign.pseudocode
+# 를 소비하면 설계 오해 시 전 후보가 같은 오답에 합의('검증됨' 오출하). 따라서 brute 는
+# 지문(ProblemSpec)만으로 독립 작성하고 설계를 읽지 않는다 — 독립 differential 복원.
+# 요구사항(code/language/iteration/lessons 형식)은 _SYSTEM_PROMPT 와 동일하게 유지.
+_BRUTE_SYSTEM_PROMPT = """\
+당신은 신중한 검산자(reference checker)다. 주어진 문제 지문(ProblemSpec)만으로
+**가장 단순하고 명백히 옳은** 정공법 풀이를 독립 작성해 typed SolutionAttempt
+(구조화된 tool call) 를 반환한다. 효율은 무시하라 — 완전탐색/직접 시뮬레이션/O(N²)
+이상도 좋다 (작은 검증 입력에만 실행된다). 제공되는 AlgorithmDesign(의사코드/복잡도)은
+**읽지 말고 따르지도 말 것** — 당신의 역할은 그 설계와 독립적인 교차검증이다.
+
+요구사항:
+- code: 완전한 python solution (stdin 으로 input 읽고 stdout 으로 output 출력).
+- language: "python" (Phase 1 기본).
+- iteration: 입력으로 받은 iteration 값.
+- lessons: 이 시도에서 학습한 lessons 의 list (signature + content + from_iter).
+  prev IterationContext 의 lessons 와 중복되지 않게 (signature dedup 의무).
+
+prev verification.feedback 가 있으면:
+- failure_mode + invariant_violations + actionable_hint 를 정확히 반영해 새 code.
+- 같은 blocking_signature 반복 회피 (oscillation 방지).
+- accumulated_lessons 와 failed_strategies 를 참고해 같은 실수 회피.
+"""
+
+
 # v2 synthesis 전용 입력 파싱 규율 (opt-in). 골든/brute 코더가 같은 입력을 같게
 # 읽어야 reconcile 합의 → 출하. 배치 진단상 array/value 시드 출하의 1위 병목이
 # "양쪽 비-reference 코더 동시 IndexError"(파서 불일치)였다. literal 중괄호 금지
@@ -57,15 +84,21 @@ _PARSE_DISCIPLINE = """
 """
 
 
-def _coder_system_prompt(parse_discipline: bool) -> str:
+def _coder_system_prompt(
+    parse_discipline: bool, *, brute_mode: bool = False
+) -> str:
     """coder system prompt — ``parse_discipline`` 시 입력 파싱 규율을 append.
 
     v1 ``make_coder_node`` 는 기본 off 로 ``_SYSTEM_PROMPT`` 동결 유지(91.2% anchor
     자산); v2 synthesis(골든/brute)는 on 으로 파서 불일치 RTE(IndexError) 거부를 줄인다.
+    ``brute_mode`` 는 base 를 ``_BRUTE_SYSTEM_PROMPT``(검산자 — 설계 비공유 독립
+    교차검증)로 교체하되, ``_PARSE_DISCIPLINE`` append 는 동일 적용 — preamble 파싱
+    규율은 reconcile 합의의 전제라 brute 에서도 절대 제거하지 않는다.
     """
+    base = _BRUTE_SYSTEM_PROMPT if brute_mode else _SYSTEM_PROMPT
     if parse_discipline:
-        return _SYSTEM_PROMPT + _PARSE_DISCIPLINE
-    return _SYSTEM_PROMPT
+        return base + _PARSE_DISCIPLINE
+    return base
 
 
 # RTE 레버 — canonical 파서 기계적 보장 (fail_synthesis 1위 병목 54% 진단 후속, #2).
@@ -179,7 +212,11 @@ def _render_prev_attempt(state: V1State) -> str:
     )
 
 
-def _build_user_prompt(state: V1State) -> str:
+def _build_user_prompt(state: V1State, *, brute_mode: bool = False) -> str:
+    """coder user prompt 렌더. ``brute_mode`` 시 design 관련 라인(algorithm/
+    complexity_target/pseudocode/required invariants)을 **제외** — brute 검산자가
+    골든의 설계 오해를 그대로 재생산하지 않는 독립 differential 의 프롬프트 격리.
+    나머지(spec/샘플/preamble/lessons/verification)는 동일 렌더."""
     spec = state.spec
     design = state.design
     if spec is None or design is None:
@@ -195,12 +232,17 @@ def _build_user_prompt(state: V1State) -> str:
         f"io_contract.input_format: {spec.io_contract.input_format}",
         f"io_contract.output_format: {spec.io_contract.output_format}",
         f"time_limit_ms: {spec.time_limit_ms}, memory_limit_mb: {spec.memory_limit_mb}",
-        "",
-        f"algorithm: {design.algorithm_name}",
-        f"complexity_target: time={design.complexity_target.time_big_o}, "
-        f"space={design.complexity_target.space_big_o}",
-        f"pseudocode: {design.pseudocode}",
-        f"required invariants: {[i.kind for i in design.invariants]}",
+    ]
+    if not brute_mode:
+        parts += [
+            "",
+            f"algorithm: {design.algorithm_name}",
+            f"complexity_target: time={design.complexity_target.time_big_o}, "
+            f"space={design.complexity_target.space_big_o}",
+            f"pseudocode: {design.pseudocode}",
+            f"required invariants: {[i.kind for i in design.invariants]}",
+        ]
+    parts += [
         "",
         "sample testcases (input → expected):",
     ]
@@ -237,19 +279,30 @@ class AnthropicCoderLLM:
     """production impl — Opus + structured output."""
 
     def __init__(
-        self, model: str = CODER_MODEL, *, parse_discipline: bool = False
+        self,
+        model: str = CODER_MODEL,
+        *,
+        parse_discipline: bool = False,
+        brute_mode: bool = False,
     ) -> None:
         from langchain_anthropic import ChatAnthropic
         from langchain_core.prompts import ChatPromptTemplate
 
         llm = ChatAnthropic(model_name=model, timeout=60, stop=None)
         prompt = ChatPromptTemplate.from_messages(
-            [("system", _coder_system_prompt(parse_discipline)), ("user", "{user}")]
+            [
+                (
+                    "system",
+                    _coder_system_prompt(parse_discipline, brute_mode=brute_mode),
+                ),
+                ("user", "{user}"),
+            ]
         )
         self._chain = (
             prompt | llm.with_structured_output(SolutionAttempt)
         ).with_retry(stop_after_attempt=5, wait_exponential_jitter=True)
         self._parse_discipline = parse_discipline
+        self._brute_mode = brute_mode
 
     def generate(self, state: V1State) -> SolutionAttempt:
         preamble = ""
@@ -257,7 +310,7 @@ class AnthropicCoderLLM:
             preamble = state.spec.input_parser_code
 
         def _once(corrective: str | None) -> SolutionAttempt:
-            user = _build_user_prompt(state)
+            user = _build_user_prompt(state, brute_mode=self._brute_mode)
             if corrective:
                 user = f"{user}\n\n{corrective}"
             result = self._chain.invoke({"user": user})

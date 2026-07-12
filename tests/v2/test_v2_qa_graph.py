@@ -1,8 +1,8 @@
 """v2 QA 스테이지 통합테스트 — with_qa=True (Phase 3 M5 step3).
 
-suite_assembler 후 QA 리뷰어 4종 병렬 fan-out → aggregator(N11) → 게이트 배선을
+suite_assembler 후 QA 리뷰어 5종 병렬 fan-out → aggregator(N11) → 게이트 배선을
 mock LLM + scripted runner 로 검증:
-1. 전원 통과: qa_report.overall_pass → end_success, qa_reviews 4종(dedup).
+1. 전원 통과: qa_report.overall_pass → end_success, qa_reviews 5종(dedup).
 2. 일부 실패: failed_kinds 기록 + final_status='fail_qa' (단발 게이트 — back-route
    루프는 후속 step).
 3. build guard: with_qa=True 는 with_test_suite=True 필수.
@@ -102,7 +102,7 @@ class _EchoRunner:
 
 
 class _QAReviewerLLM:
-    """kind 별 pass/fail 스크립트 — 병렬 4종 mock."""
+    """kind 별 pass/fail 스크립트 — 병렬 전종(5종) mock."""
 
     def __init__(self, passed: bool, kind: QAReviewerKind) -> None:
         self._passed = passed
@@ -186,7 +186,7 @@ def test_qa_pipeline_all_pass() -> None:
 
     assert final.final_status == "success"
     assert final.test_suite is not None and final.test_suite.is_assembled
-    assert len(final.qa_reviews) == 4  # 4 병렬 리뷰어, dedup 멱등
+    assert len(final.qa_reviews) == len(ALL_KINDS)  # 병렬 리뷰어 전종, dedup 멱등
     assert {r.kind for r in final.qa_reviews} == set(ALL_KINDS)
     assert final.qa_report is not None
     assert final.qa_report.overall_pass is True

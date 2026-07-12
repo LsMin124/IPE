@@ -34,6 +34,31 @@ collection 필드명을 선언하면, 2-pass 직렬화가 그 필드의 **실제
 tier 적용: ScaleFamily.field_bounds(이름=필드명)는 스칼라의 **값**, sized 타입의
 **크기**(graph 는 정점 수 V)를 그 tier 로 좁힌다. 원소/가중치 값은 io_schema 의
 value_range. 참조 스칼라는 tier 를 보지 않는다(실제 크기에 바인딩).
+
+adversarial 아키타입 (상용 저지 수준 케이스 강도): edge bias 를 확장해 boundary/퇴화 외
+**구조 스트레스** 입력을 같은 결정론 메커니즘으로 생성한다 —
+- graph: ``path_chain``(선형 사슬, 지름 최대) / ``star``(허브 차수 집중) / ``dense``·
+  ``cycle_heavy``(간선 상한 근접·사슬+추가 간선=사이클 다수) / ``duplicate_edges``(다중
+  간선 극단 — graph_shape.multi_edges 허용 시만) / ``equal_weights``·``extreme_weights``
+  (모든 가중치 동일=tie 스트레스·상하한 혼재).
+- sequence(int_array): ``sorted_asc``/``sorted_desc``/``all_equal``/``alternating``/
+  ``single_element``/``extreme_values``. **sequence_shape 핀이 항상 우선** — 핀과
+  모순되는 아키타입(예: strictly_increasing 에 all_equal)은 derive 가 방출하지 않고,
+  직렬화기도 방어적으로 핀을 위반하지 않는다(핀 승리).
+- string: ``all_same_char``/``periodic``(짧은 주기 반복 — KMP류 스트레스). alphabet 핀 내.
+방출 게이트 = ``_ADVERSARIAL_MIN_SIZE``: size 상한이 임계 미만인 소규모 스키마는 기존
+edge 집합만 유지(소형 입력은 small tier random 이 구조 공간을 사실상 전부 덮고 naive TLE
+유도 불가 — 케이스 수 바운드 겸 기존 소형 suite 정책 보존). ``max_stress`` 는 max_size
+와 별도의 상한 타격 케이스 1개를 더해 진짜 상한(size hi·최대 밀도) 케이스를 suite 에
+최소 2개 보장한다(naive TLE 유도).
+
+원소 총량 상한 이원화: max 계열(bias="max" — max_size/max_stress)만
+``_MAX_STRESS_ELEMENTS``(5×10^4), 그 외 전 케이스는 ``_MAX_ELEMENTS``(10^4) — 전 케이스
+1만 클램프는 O(N²) 오답이 시간 내 통과하는 complexity 분리 실패를 낳았고(지문 N≤10^5
+선언 vs 실데이터 1만), 반대로 전 케이스 5만은 패키지 크기·golden 실행 비용을 폭증시킨다.
+아키타입 크기 하한: 최소 크기 전제가 있는 아키타입(duplicate_edges/periodic/alternating/
+extreme_values/all_equal/graph 구조 전부)은 크기 random 추첨이 1 을 뽑아도 size 상한이
+허용하면 하한 2 로 클램프 — 카테고리명↔입력 불일치(F18 동형) 구조 차단.
 """
 
 from __future__ import annotations
@@ -81,8 +106,93 @@ _ALPHABETS = {
 # 패키지/전송 실용성의 타협(≈수백 KB/입력); 조정은 이 상수만.
 _MAX_ELEMENTS = 10000
 
-# "disconnected" 는 graph 타입 전용 의미(두 컴포넌트) — 비-graph 필드에선 random 취급
-_Bias = Literal["random", "empty", "min", "max", "disconnected"]
+# max 계열(bias="max" — max_size·max_stress) 전용 스트레스 상한 (기본 상한과 분리).
+# 전 케이스 10^4 클램프는 지문이 N≤10^5 를 선언해도 실제 최대 테스트가 원소 1만 개라
+# O(N²) 오답이 시간 내 통과하는 complexity 분리 실패를 낳았다 — 상한 타격 케이스만
+# 5×10^4 로 올려 naive TLE 를 실측 유도한다(파이썬 정해가 2초 내 처리 가능한 수준·실측).
+# max 계열은 suite 당 1~3개뿐이라 패키지 크기·golden 실행 비용 증가는 바운드됨. 나머지
+# 케이스(random tier·기타 아키타입)는 _MAX_ELEMENTS 유지 (패키지/실행 비용 보호).
+_MAX_STRESS_ELEMENTS = 50_000
+
+# "disconnected" 는 graph 타입 전용 의미(두 컴포넌트) — 비-graph 필드에선 random 취급.
+# adversarial 아키타입 bias 들도 동형: 해당 타입 필드에서만 구조로 실현, 그 외 필드에선
+# random 취급(경계/범위 위반 불가 — _pick_* fallthrough).
+_Bias = Literal[
+    "random",
+    "empty",
+    "min",
+    "max",
+    "disconnected",
+    # graph 구조 아키타입 (weighted_edges/tree_edges)
+    "path_chain",
+    "star",
+    "dense",
+    "cycle_heavy",
+    "duplicate_edges",
+    "equal_weights",
+    "extreme_weights",
+    # sequence 아키타입 (int_array — sequence_shape 핀 우선)
+    "sorted_asc",
+    "sorted_desc",
+    "all_equal",
+    "alternating",
+    "single_element",
+    "extreme_values",
+    # string 아키타입 (alphabet 핀 내)
+    "all_same_char",
+    "periodic",
+]
+
+# 아키타입 그룹 — _edge_bias 의 exact-name 매핑 + 직렬화기 dispatch 가 READ.
+_GRAPH_ARCHETYPES: tuple[_Bias, ...] = (
+    "path_chain",
+    "star",
+    "dense",
+    "cycle_heavy",
+    "duplicate_edges",
+    "equal_weights",
+    "extreme_weights",
+)
+_SEQUENCE_ARCHETYPES: tuple[_Bias, ...] = (
+    "sorted_asc",
+    "sorted_desc",
+    "all_equal",
+    "alternating",
+    "single_element",
+    "extreme_values",
+)
+_STRING_ARCHETYPES: tuple[_Bias, ...] = ("all_same_char", "periodic")
+
+# adversarial 아키타입 방출 게이트 — size 상한이 이 값 미만인 소규모 스키마는 기존 edge
+# 집합만 유지: 소형 입력은 small tier random 이 구조 공간을 사실상 전부 덮고 naive TLE
+# 유도도 불가능해 아키타입이 이름만 늘린다(케이스 수 바운드 + 기존 소형 suite 정책 보존).
+_ADVERSARIAL_MIN_SIZE = 10
+
+# 크기 2 미만에서 카테고리명이 약속하는 구조가 **거짓**이 되는 아키타입 — duplicate_edges
+# (V=1 은 다중 간선 불가)·periodic(길이 1 은 주기 없음)·alternating(교대 최소 2)·
+# extreme_values(하한/상한 혼재)·all_equal(tie 는 원소 2+) + graph 구조 전부(V=1 은 간선
+# 0 — dense/cycle_heavy/사슬/스타/가중치 아키타입이 전부 공허). 크기 random 추첨이 1 을
+# 뽑으면 기본 경로 fallback 으로 카테고리명↔입력 불일치(F18 동형)가 났다 — size 상한이
+# 허용하면(≥2) 하한을 2 로 클램프해 **항상** 실현을 보장한다(상한 1 스키마는 클램프 불가
+# — derive 게이트(_ADVERSARIAL_MIN_SIZE)가 애초 방출하지 않으므로 방어 fallback 만 유지).
+_ARCHETYPE_MIN_SIZE = 2
+
+
+def _element_cap(bias: _Bias) -> int:
+    """케이스별 유효 원소 총량 상한 — max 계열(bias=="max": max_size·max_stress 등 상한
+    타격 케이스)만 ``_MAX_STRESS_ELEMENTS``, 그 외 전부 ``_MAX_ELEMENTS`` (분리 원칙).
+    상한 선택은 rng 를 소비하지 않는다 — 같은 seed → 같은 출력 (결정론 보존)."""
+    return _MAX_STRESS_ELEMENTS if bias == "max" else _MAX_ELEMENTS
+
+
+def _archetype_size_floor(n: int, size_hi: int) -> int:
+    """아키타입 크기 하한 클램프 — 상한이 허용할 때만 ``_ARCHETYPE_MIN_SIZE`` 로 올린다.
+
+    호출측이 해당 타입에서 최소 크기 전제가 있는 bias 인지 판단해 부른다(비대상 필드의
+    random 취급 불변). 클램프는 rng 를 소비하지 않아 결정론 보존."""
+    if size_hi >= _ARCHETYPE_MIN_SIZE:
+        return max(n, _ARCHETYPE_MIN_SIZE)
+    return n
 
 
 def seed_from_run_id(run_id: str) -> int:
@@ -504,7 +614,9 @@ def derive_edge_cases(io_schema: IOSchema) -> tuple[EdgeCaseSpec, ...]:
     각 이름은 ``_edge_bias`` 가 인식하는 bias 로 매핑되고 직렬화기가 그 입력을 실제로
     만든다 — LLM 이 만들 수 없는 카테고리(self_loop·특정 위상 등)를 채점셋 이름에 남겨
     형식 계약과 모순시키던 F18 reject 클래스를 구조적으로 제거(N=18 실측). 집합 =
-    {min_size/max_size 크기 경계, empty(안전시), disconnected(분리가능 그래프)}.
+    {min_size/max_size 크기 경계, empty(안전시), disconnected(분리가능 그래프)} +
+    adversarial 아키타입(``_derive_adversarial_edges`` — 규모 게이트·shape 핀 존중,
+    상용 저지 케이스 강도).
     """
     sized = [f for f in io_schema.inputs if _is_sized(f)]
     edges: list[EdgeCaseSpec] = []
@@ -523,7 +635,138 @@ def derive_edge_cases(io_schema: IOSchema) -> tuple[EdgeCaseSpec, ...]:
         edges.append(
             EdgeCaseSpec(name="disconnected", description="분리: 비연결 그래프(도달 불가)")
         )
+    edges.extend(_derive_adversarial_edges(io_schema))
     return tuple(edges)
+
+
+# ---------- adversarial 아키타입 파생 (상용 저지 케이스 강도 — 순수 투영 확장) ----------
+# boundary/퇴화(위 집합) 위에 구조 스트레스 아키타입을 얹는다. F18 교훈 동일 적용: 각
+# 이름은 직렬화기가 **실제로 실현**하는 입력에만 붙는다 — shape 핀(sortedness/duplicates/
+# multi_edges)과 모순되는 아키타입은 그 스키마에 방출하지 않는다(카테고리명↔입력 정합).
+# 비용: 추가 대형(상한) 케이스는 max_stress 1개뿐, 나머지는 random 크기(저렴).
+
+
+def _adversarial_scale(field: IOFieldSpec) -> bool:
+    """adversarial 아키타입을 방출할 규모인가 — sized + size 상한 ≥ 임계."""
+    return _is_sized(field) and _effective_size(field)[1] >= _ADVERSARIAL_MIN_SIZE
+
+
+def _multi_edges_allowed(field: IOFieldSpec) -> bool:
+    """duplicate_edges 실현 가능 여부 — graph_shape 미핀(레거시 상수 True) 또는 허용 핀."""
+    return field.graph_shape is None or field.graph_shape.multi_edges
+
+
+def _value_spread(field: IOFieldSpec) -> bool:
+    """원소/가중치 값 범위가 실제로 벌어져 있는가 (equal/extreme 아키타입이 genuine)."""
+    lo, hi = _element_bounds(field)
+    return lo < hi
+
+
+def _seq_unsorted(field: IOFieldSpec) -> bool:
+    """정렬 아키타입(asc/desc/alternating) 실현 가능 — 정렬 미핀(무정렬)일 때만.
+    정렬 핀 배열엔 재배치 아키타입이 핀과 중복(asc)이거나 모순(desc/zigzag)."""
+    shape = field.sequence_shape
+    return shape is None or shape.sortedness == "unsorted"
+
+
+def _seq_dups_allowed(field: IOFieldSpec) -> bool:
+    """중복값 아키타입(all_equal/extreme_values) 실현 가능 — distinct 핀이 없을 때만."""
+    shape = field.sequence_shape
+    if shape is None:
+        return True
+    return shape.duplicates_allowed and shape.sortedness != "strictly_increasing"
+
+
+def _graph_archetype_edges(graphs: list[IOFieldSpec]) -> list[EdgeCaseSpec]:
+    """graph 구조 아키타입 — 트리엔 chain/star 만(사이클·추가 간선 불가), weighted 엔
+    밀도/사이클/다중간선, 가중치 범위가 벌어진 필드가 있으면 tie/극단 가중치."""
+    if not graphs:
+        return []
+    out = [
+        EdgeCaseSpec(name="path_chain", description="선형 사슬 — 지름 최대(깊이/전파 스트레스)"),
+        EdgeCaseSpec(name="star", description="스타 — 허브 정점 차수 집중"),
+    ]
+    weighted = [f for f in graphs if f.type == "weighted_edges"]
+    if weighted:
+        out.append(EdgeCaseSpec(name="dense", description="조밀 — 간선 수 상한 근접"))
+        out.append(
+            EdgeCaseSpec(name="cycle_heavy", description="사이클 다수 — 사슬 + 추가 간선")
+        )
+    if any(_multi_edges_allowed(f) for f in weighted):
+        out.append(
+            EdgeCaseSpec(name="duplicate_edges", description="다중 간선 극단 — 같은 쌍 반복")
+        )
+    if any(f.value_range is not None and _value_spread(f) for f in graphs):
+        out.append(
+            EdgeCaseSpec(name="equal_weights", description="모든 가중치 동일 — tie 스트레스")
+        )
+        out.append(
+            EdgeCaseSpec(name="extreme_weights", description="가중치 하한/상한 혼재 — 극단값")
+        )
+    return out
+
+
+def _sequence_archetype_edges(arrays: list[IOFieldSpec]) -> list[EdgeCaseSpec]:
+    """sequence 아키타입 — sequence_shape 핀을 존중해 실현 가능한 것만 방출."""
+    if not arrays:
+        return []
+    out: list[EdgeCaseSpec] = []
+    if any(_seq_unsorted(f) for f in arrays):
+        out.append(EdgeCaseSpec(name="sorted_asc", description="오름차순 정렬 배열 — 편향 정렬"))
+        out.append(
+            EdgeCaseSpec(name="sorted_desc", description="내림차순 정렬 배열 — 역정렬(최악 비교)")
+        )
+        out.append(
+            EdgeCaseSpec(
+                name="alternating", description="지그재그(저-고 교대) — 인접 비교 스트레스"
+            )
+        )
+    if any(_seq_dups_allowed(f) for f in arrays):
+        out.append(
+            EdgeCaseSpec(name="all_equal", description="전 원소 동일 — tie/중복 스트레스")
+        )
+        if any(_seq_dups_allowed(f) and _value_spread(f) for f in arrays):
+            out.append(
+                EdgeCaseSpec(name="extreme_values", description="값 하한/상한 혼재 — 극단값")
+            )
+    if any(_effective_size(f)[0] <= 1 for f in arrays):
+        out.append(
+            EdgeCaseSpec(name="single_element", description="원소 1개 — 최소 비퇴화 입력")
+        )
+    return out
+
+
+def _string_archetype_edges(strings: list[IOFieldSpec]) -> list[EdgeCaseSpec]:
+    """string 아키타입 — alphabet 핀 내에서 항상 실현 가능."""
+    if not strings:
+        return []
+    return [
+        EdgeCaseSpec(name="all_same_char", description="단일 문자 반복 — 최악 중복"),
+        EdgeCaseSpec(name="periodic", description="짧은 주기 반복 문자열 — 주기성(KMP류) 스트레스"),
+    ]
+
+
+def _derive_adversarial_edges(io_schema: IOSchema) -> list[EdgeCaseSpec]:
+    """io_schema → adversarial 아키타입 edge 들 (게이트: _ADVERSARIAL_MIN_SIZE).
+
+    max_stress 는 max_size 와 별도의 상한 타격 케이스(bias=max, 다른 rng 스트림) —
+    진짜 상한(size hi·최대 밀도) 케이스를 suite 에 최소 2개 보장한다(naive TLE 유도).
+    각 아키타입은 exact-name 으로 ``_edge_bias`` 에 매핑돼 직렬화기가 실현한다.
+    """
+    adv = [f for f in io_schema.inputs if _adversarial_scale(f)]
+    if not adv:
+        return []
+    out = [
+        EdgeCaseSpec(
+            name="max_stress", description="상한 재타격: 최대 규모 2번째 케이스 (naive TLE 유도)"
+        )
+    ]
+    out += _graph_archetype_edges(
+        [f for f in adv if f.type in ("weighted_edges", "tree_edges")]
+    )
+    out += _sequence_archetype_edges([f for f in adv if f.type == "int_array"])
+    out += _string_archetype_edges([f for f in adv if f.type == "string"])
+    return out
 
 
 def derive_generator_contract(io_schema: IOSchema) -> GeneratorContract:
@@ -668,9 +911,11 @@ def _serialize_field(
         return f"{_pick_float(lo, hi, bias, rng):.4f}", None
     if t == "string":
         n = max(_pick_size(_size_bounds(field, tier_bound), bias, rng), _STRING_MIN_LEN)
-        n = min(n, _MAX_ELEMENTS)  # 길이 캡
+        if bias == "periodic":  # 길이 1 은 주기 불가 — 하한 2 보장 (카테고리명↔입력 정합)
+            n = _archetype_size_floor(n, _size_bounds(field, tier_bound)[1])
+        n = min(n, _element_cap(bias))  # 길이 캡 (max 계열은 스트레스 상한)
         pool = _string_alphabet(field.string_shape)
-        return "".join(rng.choice(pool) for _ in range(n)), n
+        return _string_text(n, pool, bias, rng), n
     if t == "int_array":
         return _serialize_int_array(field, tier_bound, rng, bias=bias)
     if t in ("int_matrix", "grid"):  # grid = int_matrix 와 동일 canonical 규약
@@ -705,11 +950,14 @@ def _serialize_int_array(
     bias: _Bias,
 ) -> tuple[str, int]:
     n = _pick_size(_size_bounds(field, tier_bound), bias, rng)
+    if bias in ("alternating", "extreme_values", "all_equal"):
+        # 교대/혼재/tie 는 원소 2+ 필요 — 크기 1 추첨 시 카테고리명이 거짓 (하한 2 보장).
+        n = _archetype_size_floor(n, _size_bounds(field, tier_bound)[1])
     if n <= 0:
         return "0", 0
-    n = min(n, _MAX_ELEMENTS)  # 원소 총량 캡 (패키지 비대화/생성 OOM 차단)
+    n = min(n, _element_cap(bias))  # 원소 총량 캡 (max 계열은 스트레스 상한)
     lo, hi = _element_bounds(field)
-    values = _sequence_values(field.sequence_shape, n, lo, hi, rng)
+    values = _sequence_values(field.sequence_shape, n, lo, hi, rng, bias=bias)
     vals = " ".join(str(v) for v in values)
     return f"{len(values)}\n{vals}", len(values)  # 크기 = 원소 개수 N (참조 바인딩 대상)
 
@@ -720,6 +968,8 @@ def _sequence_values(
     lo: int,
     hi: int,
     rng: random.Random,
+    *,
+    bias: _Bias = "random",
 ) -> list[int]:
     """int_array 원소값 — ``sequence_shape`` 의 sortedness/duplicates 를 honor (G1a).
 
@@ -729,10 +979,13 @@ def _sequence_values(
       표본추출. 범위가 n 보다 좁으면 범위 크기로 캡 — 실현가능성(같은 값 없이 n 개를
       못 담으면 담을 수 있는 만큼만).
     - 정렬 요구(non_decreasing/strictly_increasing): 추출 후 오름차순 정렬.
+    - adversarial 아키타입 bias 는 ``_archetype_sequence_values`` 로 분기 — 핀 승리.
 
     정렬/distinct 가 켜진 경로는 byte-identical 대상이 아니므로(핀된 의도적 변주) rng
     추출 방식이 달라도 무방 — 고정 seed 면 여전히 결정론.
     """
+    if bias in _SEQUENCE_ARCHETYPES:
+        return _archetype_sequence_values(shape, n, lo, hi, rng, bias)
     if shape is None or (shape.sortedness == "unsorted" and shape.duplicates_allowed):
         return [rng.randint(lo, hi) for _ in range(n)]  # byte-identical 경로
     distinct = shape.sortedness == "strictly_increasing" or not shape.duplicates_allowed
@@ -746,6 +999,80 @@ def _sequence_values(
     return values
 
 
+def _archetype_sequence_values(
+    shape: SequenceShape | None,
+    n: int,
+    lo: int,
+    hi: int,
+    rng: random.Random,
+    bias: _Bias,
+) -> list[int]:
+    """sequence 아키타입 값 — **shape 핀이 항상 우선** (핀 위반 입력 생성 불가).
+
+    - all_equal: 단일 값 반복 (tie/중복 스트레스). distinct 핀이면 기본 추출로 fallback
+      (방어 — derive 게이트가 애초에 방출 안 함).
+    - extreme_values: 하한/상한 혼재 (극단값 스트레스). distinct 핀·단일값 범위면 fallback.
+    - sorted_asc/sorted_desc/alternating(+위 fallback): 기본 추출(distinct 존중) 후
+      **배열 순서만** 아키타입으로 재배치. 정렬 핀이면 재배치 없이 핀 정렬 유지(핀 승리
+      — 예: non_decreasing 핀에 sorted_desc bias 가 와도 오름차순 방출).
+    - single_element: 크기는 ``_pick_size`` 가 1 로 고정 — 값은 기본 추출.
+    """
+    distinct = shape is not None and (
+        shape.sortedness == "strictly_increasing" or not shape.duplicates_allowed
+    )
+    sortedness = shape.sortedness if shape is not None else "unsorted"
+    if bias == "all_equal" and not distinct:
+        return [rng.randint(lo, hi)] * n  # 정렬 핀과도 정합 (동일값 = 비내림차)
+    if bias == "extreme_values" and not distinct and lo < hi:
+        values = [lo if rng.randint(0, 1) == 0 else hi for _ in range(n)]
+        if sortedness != "unsorted":
+            values.sort()
+        return values
+    if distinct:
+        span = hi - lo + 1
+        values = sorted(rng.sample(range(lo, hi + 1), min(n, span)))
+    else:
+        values = sorted(rng.randint(lo, hi) for _ in range(n))
+    if sortedness in ("non_decreasing", "strictly_increasing"):
+        return values  # 정렬 핀 승리 — 재배치 금지
+    if bias == "sorted_desc":
+        return values[::-1]
+    if bias == "alternating":
+        return _zigzag(values)
+    return values  # sorted_asc + 나머지 fallback (오름차순 정렬 배열)
+
+
+def _zigzag(values: list[int]) -> list[int]:
+    """정렬값 → 지그재그(저-고 교대) 재배치 — 인접 비교/단조 스택류 스트레스.
+
+    distinct 입력이면 distinct 보존(재배치만). 다중집합 불변."""
+    out: list[int] = []
+    i, j = 0, len(values) - 1
+    take_low = True
+    while i <= j:
+        if take_low:
+            out.append(values[i])
+            i += 1
+        else:
+            out.append(values[j])
+            j -= 1
+        take_low = not take_low
+    return out
+
+
+def _string_text(n: int, pool: str, bias: _Bias, rng: random.Random) -> str:
+    """string 아키타입 — all_same_char(단일 문자 반복, 최악 중복)/periodic(주기 2~3 반복,
+    KMP류 주기성 스트레스). 그 외 bias 는 현행 uniform 추출(byte-identical). 문자는 항상
+    ``pool``(string_shape.alphabet 핀) 안에서만 — 핀 위반 불가."""
+    if bias == "all_same_char":
+        return rng.choice(pool) * n
+    if bias == "periodic" and n >= 2:
+        period = rng.randint(2, min(3, n))
+        unit = "".join(rng.choice(pool) for _ in range(period))
+        return (unit * (n // period + 1))[:n]
+    return "".join(rng.choice(pool) for _ in range(n))
+
+
 def _string_alphabet(shape: StringShape | None) -> str:
     """string 필드 문자 풀 — ``string_shape.alphabet`` 을 honor (G2). None(미핀) 또는
     lowercase 면 현 상수 ``_ALPHABET``(a-z) → byte-identical(같은 풀에서 같은 rng.choice).
@@ -755,12 +1082,13 @@ def _string_alphabet(shape: StringShape | None) -> str:
     return _ALPHABETS[shape.alphabet]
 
 
-def _cap_matrix(r: int, c: int) -> tuple[int, int]:
-    """행렬 원소 총량 R*C 를 _MAX_ELEMENTS 로 캡 (결정론, 큰 차원부터 축소)."""
-    r = min(r, _MAX_ELEMENTS)
-    c = min(c, _MAX_ELEMENTS)
-    if r * c > _MAX_ELEMENTS:
-        c = max(1, _MAX_ELEMENTS // r)
+def _cap_matrix(r: int, c: int, cap: int) -> tuple[int, int]:
+    """행렬 원소 총량 R*C 를 ``cap`` 으로 캡 (결정론, 큰 차원부터 축소) — cap 은
+    케이스별 유효 상한(``_element_cap``: max 계열=스트레스 상한, 그 외=기본 상한)."""
+    r = min(r, cap)
+    c = min(c, cap)
+    if r * c > cap:
+        c = max(1, cap // r)
     return r, c
 
 
@@ -778,7 +1106,7 @@ def _serialize_int_matrix(
     c = _pick_size(cols, bias, rng)
     if r <= 0 or c <= 0:
         return f"{max(r, 0)} {max(c, 0)}", max(r, 0)
-    r, c = _cap_matrix(r, c)  # R*C 총량 캡
+    r, c = _cap_matrix(r, c, _element_cap(bias))  # R*C 총량 캡 (max 계열은 스트레스 상한)
     lo, hi = _element_bounds(field)
     rows = "\n".join(
         " ".join(str(rng.randint(lo, hi)) for _ in range(c)) for _ in range(r)
@@ -800,6 +1128,39 @@ def _backbone(start: int, end: int, rng: random.Random) -> list[tuple[int, int]]
 def _edge_key(u: int, t: int, *, directed: bool) -> tuple[int, int]:
     """multi_edges=False(단순 그래프) 중복 판정 키 — directed 면 순서쌍, undirected 면 무순쌍."""
     return (u, t) if directed else (min(u, t), max(u, t))
+
+
+def _chain_edges(base: int, v: int) -> list[tuple[int, int]]:
+    """path_chain — 선형 사슬 (지름 최대·연결·단순·무사이클). v<=1 → 빈 목록."""
+    return [(base + i, base + i + 1) for i in range(v - 1)]
+
+
+def _star_edges(base: int, v: int) -> list[tuple[int, int]]:
+    """star — 허브(base) 집중 (차수 편중·연결·단순·무사이클). v<=1 → 빈 목록."""
+    return [(base, base + i) for i in range(1, v)]
+
+
+def _extra_edge_count(bias: _Bias, v: int, rng: random.Random) -> int:
+    """backbone 외 추가 간선 수 — min=0(트리 밀도), max/dense/cycle_heavy=v(조밀 상한),
+    그 외=random (현행 byte-identical)."""
+    if bias == "min":
+        return 0
+    if bias in ("max", "dense", "cycle_heavy"):
+        return v
+    return rng.randint(0, v)
+
+
+def _edge_weight_values(
+    count: int, lo: int, hi: int, bias: _Bias, rng: random.Random
+) -> list[int]:
+    """간선 가중치 — equal_weights=단일 값 반복(tie 스트레스), extreme_weights=하한/상한
+    혼재(극단값·우선순위 스트레스), 그 외=uniform (현행과 동일 rng 호출 순서 →
+    byte-identical). 값은 항상 value_range 안."""
+    if bias == "equal_weights":
+        return [rng.randint(lo, hi)] * count
+    if bias == "extreme_weights":
+        return [lo if rng.randint(0, 1) == 0 else hi for _ in range(count)]
+    return [rng.randint(lo, hi) for _ in range(count)]
 
 
 def _graph_vertex_count(
@@ -841,16 +1202,36 @@ def _serialize_weighted_edges(
         vmin = max(_size_bounds(field, tier_bound)[0], 1)
         return f"{vmin} 0", vmin  # V_min 정점, 간선 0 (헤더는 카운트라 indexing 무관)
     v = _graph_vertex_count(field, tier_bound, rng, bias)
-    v = min(v, _MAX_ELEMENTS // 2)  # E ≤ 2V → 간선 총량 캡
+    v = min(v, _element_cap(bias) // 2)  # E ≤ 2V → 간선 총량 캡 (max 계열은 스트레스 상한)
+    if bias in _GRAPH_ARCHETYPES:
+        # 구조 아키타입은 간선 1+ 필요 (V=1 은 사슬/스타/조밀/다중간선/가중치 전부 공허)
+        # — 크기 1 추첨 시 카테고리명↔입력 불일치. size 상한이 허용하면 하한 2 보장.
+        v = _archetype_size_floor(v, _size_bounds(field, tier_bound)[1])
     if bias == "disconnected" and not connected:
         v = max(v, 2)  # 두 컴포넌트가 가능한 최소
         half = (v + 1) // 2
         edges = _backbone(base, base + half - 1, rng) + _backbone(
             base + half, base + v - 1, rng
         )
-    else:  # connected 면 disconnected bias 도 단일 컴포넌트(구조 사실 우선)
+    elif bias == "path_chain":
+        edges = _chain_edges(base, v)  # 선형 사슬 — 지름 최대 (연결·단순)
+    elif bias == "star":
+        edges = _star_edges(base, v)  # 허브 집중 — 차수 편중 (연결·단순)
+    elif bias == "duplicate_edges" and multi_edges and v >= 2:
+        # 다중 간선 극단 — backbone 간선을 v 회 재방출 (같은 쌍 반복). multi_edges
+        # 미허용이면 아래 기본 경로로 fallback (dedupe 가 중복을 걸러 단순 유지).
+        # v>=2 는 위 _archetype_size_floor 가 보장(size 상한≥2 시) — 이 가드는 상한 1
+        # 스키마 방어 fallback 전용.
         edges = _backbone(base, base + v - 1, rng)
-        extra = 0 if bias == "min" else (v if bias == "max" else rng.randint(0, v))
+        edges += [edges[rng.randrange(len(edges))] for _ in range(v)]
+    else:  # connected 면 disconnected bias 도 단일 컴포넌트(구조 사실 우선)
+        # cycle_heavy 는 사슬 backbone — 추가 간선 하나마다 사이클 1개 이상 생긴다.
+        edges = (
+            _chain_edges(base, v)
+            if bias == "cycle_heavy"
+            else _backbone(base, base + v - 1, rng)
+        )
+        extra = _extra_edge_count(bias, v, rng)
         if v >= 2:
             seen = (
                 {_edge_key(u, t, directed=directed) for u, t in edges}
@@ -872,7 +1253,8 @@ def _serialize_weighted_edges(
                     seen.add(key)
                 edges.append((u, t))
     lo, hi = _element_bounds(field)  # value_range = 가중치
-    lines = [f"{u} {t} {rng.randint(lo, hi)}" for u, t in edges]
+    weights = _edge_weight_values(len(edges), lo, hi, bias, rng)
+    lines = [f"{u} {t} {w}" for (u, t), w in zip(edges, weights, strict=True)]
     return "\n".join([f"{v} {len(edges)}", *lines]), v
 
 
@@ -888,7 +1270,8 @@ def _serialize_tree_edges(
 
     트리는 정의상 연결·무사이클·단순 → graph_shape 의 connectivity/multi_edges/
     self_loops 는 구조적으로 고정(직렬화기가 보장). 정점 번호 base = ``indexing``.
-    disconnected bias 는 크기 random 으로만 작용. 반환 크기 = V.
+    disconnected bias 는 크기 random 으로만 작용. path_chain/star 아키타입은 트리의
+    특수형(사슬 트리·스타 트리 — 깊이 최대/허브 집중)이라 그대로 실현. 반환 크기 = V.
     """
     base = indexing
     if bias == "empty":
@@ -896,13 +1279,22 @@ def _serialize_tree_edges(
         v = max(_size_bounds(field, tier_bound)[0], 1)
     else:
         v = _graph_vertex_count(field, tier_bound, rng, bias)
-    v = min(v, _MAX_ELEMENTS)  # V-1 간선
+    v = min(v, _element_cap(bias))  # V-1 간선 (max 계열은 스트레스 상한)
+    if bias in _GRAPH_ARCHETYPES:
+        # 사슬/스타 트리는 간선 1+ 필요 — 크기 1 추첨 시 카테고리명↔입력 불일치 방지.
+        v = _archetype_size_floor(v, _size_bounds(field, tier_bound)[1])
     if v <= 1:
         return "1", 1  # 단일 정점 트리 (헤더는 카운트라 indexing 무관)
-    edges = _backbone(base, base + v - 1, rng)
+    if bias == "path_chain":
+        edges = _chain_edges(base, v)  # 사슬 트리 — 깊이 최대 (재귀/전파 스트레스)
+    elif bias == "star":
+        edges = _star_edges(base, v)  # 스타 트리 — 허브 차수 집중
+    else:
+        edges = _backbone(base, base + v - 1, rng)
     if field.value_range is not None:
         lo, hi = _element_bounds(field)
-        lines = [f"{u} {t} {rng.randint(lo, hi)}" for u, t in edges]
+        weights = _edge_weight_values(len(edges), lo, hi, bias, rng)
+        lines = [f"{u} {t} {w}" for (u, t), w in zip(edges, weights, strict=True)]
     else:
         lines = [f"{u} {t}" for u, t in edges]
     return "\n".join([str(v), *lines]), v
@@ -964,7 +1356,9 @@ def _pick_size(bounds: tuple[int, int], bias: _Bias, rng: random.Random) -> int:
         return lo
     if bias == "max":
         return hi
-    return rng.randint(lo, hi)
+    if bias == "single_element":
+        return min(max(lo, 1), hi)  # 크기 1 — size_range 밖이면 경계로 클램프 (위반 불가)
+    return rng.randint(lo, hi)  # 구조 아키타입 포함 — 크기는 전 범위 random
 
 
 def _bool_value(bias: _Bias, rng: random.Random) -> bool:
@@ -976,8 +1370,16 @@ def _bool_value(bias: _Bias, rng: random.Random) -> bool:
 
 
 def _edge_bias(name: str) -> _Bias:
-    """edge 케이스 이름 → boundary 전략 (generic keyword 해석)."""
+    """edge 케이스 이름 → boundary 전략 (generic keyword 해석).
+
+    adversarial 아키타입은 **exact-name 우선 매칭** — keyword 스캔보다 먼저 봐야
+    'single_element' 가 'single'→min 으로 오분류되지 않는다. derive 가 방출하는
+    이름과 1:1 (카테고리명↔입력 정합). max_stress 는 keyword 'stress'→max (상한 타격).
+    """
     low = name.lower()
+    for archetype in (*_GRAPH_ARCHETYPES, *_SEQUENCE_ARCHETYPES, *_STRING_ARCHETYPES):
+        if low == archetype:
+            return archetype
     # graph 전용 의미가 가장 구체적 — 먼저 매칭 ('disconnected_large' 등 복합어 보호)
     if any(k in low for k in ("disconnect", "unreachable", "isolated")):
         return "disconnected"

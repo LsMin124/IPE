@@ -4903,3 +4903,100 @@ CLI flag 추가 — `ipe.v1.main_v1`:
 | `CHANGES.md` §69 | 본 entry |
 
 ---
+
+## 70. v2 품질 개선 3-wave — BOJ 상용 수준 문제 품질 (2026-07-13)
+
+### 70.1 동기
+
+생성 문제의 체감 품질이 상용 저지(BOJ) 대비 미달. 4개 서브시스템 병렬 감사로
+갭을 도출하고 3-wave 병렬 구현으로 해소:
+(1) 지문 작문 품질 무기준, (2) 채점 데이터가 random+경계 위주(적대적/최대규모
+케이스 부재, _MAX_ELEMENTS=10000 전역 클램프로 지문 제약↔실데이터 괴리),
+(3) 난이도 anchor 20개 편중(Gold 9/Platinum 1/Diamond 0), (4) brute 검증자가
+golden 과 동일 프롬프트·동일 AlgorithmDesign 공유 → Tier B differential 이
+사실상 자기승인, (5) 예제 설명 채널(SampleTestCase.description) 0% 사용,
+(6) QA 리뷰어가 샘플 2개+분포 요약만 열람, 작문 품질 관점 부재.
+
+### 70.2 Wave 1 — 병렬 4 워크스트림
+
+- **난이도 calibration**: anchors.json 20→44 (Bronze 8/Silver 10/Gold 12/
+  Platinum 10/Diamond 4, 오라벨 bj_1761 교체·리뷰어 전수검증 통과).
+  difficulty.py 프롬프트에 티어 rubric(절대 프레임) + 최소 3-anchor 삼각측량 +
+  복잡도×n_max 교차확인 + 애매 시 보수 하향 + "rubric↔anchor 어긋나면 anchor
+  우선" 규율 추가. (사후 annotation 지위는 RFC R4 대로 유지 — 게이트 아님.)
+- **지문 작문 기준**: narrative.py 두 프롬프트에 '작문 품질 (BOJ 상용 수준)'
+  섹션 ADD-only (구성 2~4문단·문어체·번역투 금지·용어 일관·300~800자·제목
+  2~6어절). strategist.py _DOMAIN_POOL 21→42 (팔레트 크기·sha256 회전 불변).
+- **적대적 채점 데이터**: input_gen.py _Bias 에 graph 7종(path_chain/star/
+  dense/cycle_heavy/duplicate_edges/equal_weights/extreme_weights) + sequence
+  6종(sorted_asc/desc/all_equal/alternating/single_element/extreme_values) +
+  string 2종(all_same_char/periodic) 아키타입. shape 핀(sortedness/alphabet/
+  multi_edges)과 모순되는 아키타입은 미방출(F18 정합). max_size+max_stress 로
+  상한 타격 2개 보장. _ADVERSARIAL_MIN_SIZE=10 규모 게이트. 대형 graph 스키마
+  기준 suite 9→17 케이스.
+- **QA 게이트 5종화**: QAReviewerKind 에 "presentation"(지문 품질) 신설 —
+  P1 4종/P2 5종. blocker 는 작문 붕괴 수준만(해석 유일성은 ambiguity 전담),
+  초급 완화 charter(_PRESENTATION_CHARTER_EASY) 병설. ambiguity charter 에
+  동률/중복/퇴화 결정성 체크리스트, fairness 에 전문지식 전제 점검 추가.
+  리뷰어 열람 확대: 샘플 2→3개(300자 절단) + '[채점셋 상세]'(최대 크기·대형
+  케이스 수).
+
+### 70.3 Wave 2 — brute 독립화 + 채점셋 견고화
+
+- **brute 검증자 독립화 (correctness)**: coder.py 에 _BRUTE_SYSTEM_PROMPT
+  (검산자 — AlgorithmDesign 비열람·정공법/완전탐색·효율 무시) + brute_mode
+  플래그(user prompt 에서 design 4개 라인 제외, _PARSE_DISCIPLINE·preamble
+  compliance 는 유지). main_v2/api(+batch 는 팩토리 재사용) brute 배선에
+  brute_mode=True. Tier B differential 의 독립성 전제(§7.4) 복원.
+- **채점셋 견고화**: assembler.py 에 _MIN_SURVIVAL_RATIO=0.7 생존율 게이트
+  (카테고리별 drop 진단 포함 fail — 조용한 약체 suite 출하 차단).
+  suite_assembler 가 golden 검증된 resolved_edges 를 "edge_resolved:*"
+  카테고리로 채점셋에 병합(재실행 없음·중복 skip). spec_bridge 는
+  edge_case_semantics 선언 시 샘플 1개를 퇴화 입력으로 교체(지문의 경계
+  의미를 샘플이 시연 — BOJ 표준).
+
+### 70.4 Wave 3 — 예제 설명 + 스트레스 상한 분리
+
+- **sample_explainer 노드 신설 (N: 예제 설명)**: sample_filler 뒤 배선
+  (with_sample_explanations 플래그 — 기본 off, api/batch/CLI 프로덕션 on).
+  Sonnet 4.6, 샘플별 1~3문장 한국어 설명을 SampleTestCase.description 에
+  기입 — 인스턴스 사실만(해법 처방·형식 재서술 금지, 은닉 규율), 퇴화 샘플
+  의미 명시. LLM 예외 시 state 무변경(장식 채널 — 파이프라인 신규 실패 클래스
+  0). RECURSION_PAD_SYNTHESIS 12→13, RECURSION_LIMIT_API 90→91.
+- **스트레스 상한 분리**: _MAX_STRESS_ELEMENTS=50_000 — bias="max"(max_size/
+  max_stress)에만 적용, 나머지는 _MAX_ELEMENTS=10000 유지(패키지/실행 비용
+  보호). graph max 케이스 V≤25,000·E≈2V. formalizer 프롬프트에 '제약 크기
+  설계' 규율 ADD(생성 상한 5×10^4 정합 — 복잡도별 권장 상한, 10^5+ 선언 금지
+  → 지문 제약↔실데이터 괴리로 naive 오답이 통과하는 결함 차단).
+  _ARCHETYPE_MIN_SIZE=2 하한 클램프(duplicate_edges V=1·periodic 길이 1 등
+  카테고리명↔입력 불일치 해소). real-llm difficulty e2e 에 API 키 skip 가드.
+
+### 70.5 검증
+
+- 3-wave 각각 병렬 구현 → 통합 CI → 적대적 리뷰(2관점) → blocker 수정 루프.
+- 최종: ruff clean / mypy --strict 102 files clean / **pytest 964 passed,
+  10 skipped** (baseline 892 → +72, 전 wave 신규 테스트 포함, 무회귀).
+- 한계: 로컬에 ANTHROPIC_API_KEY 부재로 real-LLM e2e·실생성 스모크런 미수행
+  — 프롬프트 개선의 실효(작문 품질·설명 품질·calibration 정확도)는 키 있는
+  환경에서 P1/P2 배치 + `python -m ipe.v2.difficulty --force` 재측정 권장.
+
+### 70.6 변경 파일 (38 tracked +2067/-133 + 신규 4)
+
+| 영역 | 파일 |
+|---|---|
+| 난이도 | `ipe/calibration/anchors.json` `ipe/calibration/__init__.py` `ipe/v2/difficulty.py` |
+| 지문 | `ipe/v2/nodes/narrative.py` `ipe/v2/nodes/strategist.py` |
+| 채점 데이터 | `ipe/v2/generation/input_gen.py` `ipe/v2/nodes/generator_designer.py` `ipe/v2/nodes/formalizer.py` |
+| QA | `ipe/v1/schema/qa.py` `ipe/v2/nodes/qa_reviewer.py` `ipe/v2/config.py` `ipe/v2/graph.py` |
+| brute 독립화 | `ipe/v1/nodes/coder.py` `ipe/v2/main_v2.py` `ipe/v2/api.py` |
+| 채점셋 견고화 | `ipe/v2/generation/assembler.py` `ipe/v2/nodes/suite_assembler.py` `ipe/v2/nodes/spec_bridge.py` |
+| 예제 설명 | `ipe/v1/schema/sample_explanation.py`(신규) `ipe/v2/nodes/sample_explainer.py`(신규) + graph/api/main_v2/config 배선 |
+| 테스트 | tests/ 전반 +72 (신규 파일: `tests/v2/nodes/test_sample_explainer.py` `tests/v2/test_v2_sample_explainer_graph.py` 등) |
+
+### 70.7 후속 과제 (이번 범위 외)
+
+- in-graph 난이도 타겟팅(target_difficulty 노브 + 측정-목표 불일치 라우팅, RFC R4 확장)
+- special judge / float 허용오차 비교기 (toposort·max_flow 류 다답 문제)
+- leakage 리뷰어의 실코퍼스 grounding (RFC §11 Q2 재논의 트리거 경과)
+- QA back-route 의 구조 결함(스키마/채점셋 기인) 수선 경로 확장
+- samples_engaged=0 (symbolic verifier silent skip) 신호의 게이트/진단 승격

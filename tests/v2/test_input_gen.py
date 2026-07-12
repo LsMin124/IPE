@@ -20,6 +20,7 @@ from ipe.v1.schema import (
 )
 from ipe.v2.generation.input_gen import (
     _MAX_ELEMENTS,
+    _MAX_STRESS_ELEMENTS,
     derive_degenerate_inputs,
     derive_edge_cases,
     derive_generator_contract,
@@ -485,7 +486,7 @@ def test_grid_matches_int_matrix_canonical() -> None:
 
 
 def test_max_scale_graph_input_is_element_capped() -> None:
-    """V=200000=7.8MB 입력 실측 회귀 — bias=max 그래프도 _MAX_ELEMENTS 로 바운드."""
+    """V=200000=7.8MB 입력 실측 회귀 — bias=max 그래프는 스트레스 상한으로 바운드."""
     schema = _io_schema(_weighted_edges_field(2, 50000))  # 본래 대형 그래프
     contract = GeneratorContract(
         scale_families=(ScaleFamily(name="s", case_count=1),),
@@ -494,13 +495,15 @@ def test_max_scale_graph_input_is_element_capped() -> None:
     edge = next(
         c for c in generate_inputs(contract, schema, seed=7) if c.category == "max_stress"
     )
-    _, e, _ = _parse_graph(edge.input_text)
-    assert e <= _MAX_ELEMENTS  # 총 간선 캡
+    v, e, _ = _parse_graph(edge.input_text)
+    assert v <= _MAX_STRESS_ELEMENTS // 2  # 정점 캡 (E ≤ 2V 산식 동일 원칙)
+    assert e <= _MAX_STRESS_ELEMENTS  # 총 간선 캡 (max 계열 스트레스 상한)
+    assert e > _MAX_ELEMENTS  # 기본 상한을 실제로 초과 활용 (complexity 분리)
     assert len(edge.input_text) < 1_500_000  # 수MB → 수백KB
 
 
 def test_max_scale_array_input_is_element_capped() -> None:
-    """대형 배열(OOM 유발) bias=max 도 N ≤ _MAX_ELEMENTS."""
+    """대형 배열(OOM 유발) bias=max 도 N ≤ 스트레스 상한 (기본 상한은 초과 활용)."""
     field = IOFieldSpec(
         name="arr",
         type="int_array",
@@ -516,15 +519,17 @@ def test_max_scale_array_input_is_element_capped() -> None:
         for c in generate_inputs(contract, _io_schema(field), seed=3)
         if c.category == "max_size"
     )
-    assert int(edge.input_text.split("\n")[0]) <= _MAX_ELEMENTS  # N
+    n = int(edge.input_text.split("\n")[0])
+    assert n <= _MAX_STRESS_ELEMENTS  # N ≤ 스트레스 상한
+    assert n > _MAX_ELEMENTS  # 기본 상한을 실제로 초과 활용 (complexity 분리)
 
 
 def test_max_scale_matrix_total_elements_capped() -> None:
-    """행렬 R*C 원소 총량도 _MAX_ELEMENTS 로 캡 (R*C 폭주 방지)."""
+    """행렬 R*C 원소 총량도 max 계열은 스트레스 상한으로 캡 (R*C 폭주 방지)."""
     field = IOFieldSpec(
         name="m",
         type="int_matrix",
-        size_range=ConstraintRange(name="m", min_value=1, max_value=200),
+        size_range=ConstraintRange(name="m", min_value=1, max_value=400),
         value_range=ConstraintRange(name="v", min_value=0, max_value=9),
     )
     contract = GeneratorContract(
@@ -537,7 +542,53 @@ def test_max_scale_matrix_total_elements_capped() -> None:
         if c.category == "max_grid"
     )
     r, c = (int(x) for x in edge.input_text.split("\n")[0].split())
-    assert r * c <= _MAX_ELEMENTS
+    assert r * c <= _MAX_STRESS_ELEMENTS  # 400*400=160000 → 캡 실동작
+    assert r * c > _MAX_ELEMENTS  # 스트레스 상한 활용
+
+
+def test_non_max_cases_keep_default_element_cap() -> None:
+    """비-max 케이스(random tier·구조 아키타입)는 기본 상한(1만) 유지 — 패키지/실행 비용 보호."""
+    field = IOFieldSpec(
+        name="arr",
+        type="int_array",
+        size_range=ConstraintRange(name="arr", min_value=150000, max_value=200000),
+        value_range=ConstraintRange(name="v", min_value=0, max_value=9),
+    )
+    contract = GeneratorContract(
+        scale_families=(ScaleFamily(name="large", case_count=3),),
+        edge_cases=(EdgeCaseSpec(name="sorted_desc"),),  # 구조 아키타입 (크기 random)
+    )
+    for case in generate_inputs(contract, _io_schema(field), seed=11):
+        assert int(case.input_text.split("\n")[0]) <= _MAX_ELEMENTS  # N ≤ 기본 상한
+
+
+def test_non_max_graph_archetypes_keep_default_cap() -> None:
+    """graph 구조 아키타입(dense 등)도 기본 상한 — 스트레스 상한은 max 계열 전용."""
+    schema = _io_schema(_weighted_edges_field(2, 200000))
+    contract = GeneratorContract(
+        scale_families=(ScaleFamily(name="s", case_count=1),),
+        edge_cases=(EdgeCaseSpec(name="dense"), EdgeCaseSpec(name="cycle_heavy")),
+    )
+    for case in generate_inputs(contract, schema, seed=4):
+        _, e, _ = _parse_graph(case.input_text)
+        assert e <= _MAX_ELEMENTS  # V ≤ 기본상한//2 → E ≤ 2V ≤ 기본 상한
+
+
+def test_stress_cap_cases_remain_deterministic() -> None:
+    """스트레스 상한 경로 포함 — 같은 seed → 같은 출력 (결정론 보존)."""
+    field = IOFieldSpec(
+        name="arr",
+        type="int_array",
+        size_range=ConstraintRange(name="arr", min_value=1, max_value=200000),
+        value_range=ConstraintRange(name="v", min_value=0, max_value=9),
+    )
+    contract = GeneratorContract(
+        scale_families=(ScaleFamily(name="s", case_count=1),),
+        edge_cases=(EdgeCaseSpec(name="max_size"), EdgeCaseSpec(name="max_stress")),
+    )
+    a = generate_inputs(contract, _io_schema(field), seed=21)
+    b = generate_inputs(contract, _io_schema(field), seed=21)
+    assert [c.input_text for c in a] == [c.input_text for c in b]
 
 
 def test_size_cap_preserves_inputs_under_limit() -> None:
@@ -1218,7 +1269,8 @@ def test_derive_scalar_schema_single_nominal_family() -> None:
 
 
 def test_derive_graph_schema_tiers_and_edges() -> None:
-    """weighted_edges(shape=None 레거시) — small/large tier + 4 실현가능 edge."""
+    """weighted_edges(shape=None 레거시, 대규모) — small/large tier + 4 실현가능 edge
+    + adversarial 아키타입(max_stress·구조·가중치 — 상용 저지 케이스 강도)."""
     schema = _io_schema(_derive_edges_field())
     assert {f.name for f in derive_scale_families(schema)} == {"small", "large"}
     assert {e.name for e in derive_edge_cases(schema)} == {
@@ -1226,11 +1278,20 @@ def test_derive_graph_schema_tiers_and_edges() -> None:
         "max_size",
         "empty",
         "disconnected",
+        "max_stress",
+        "path_chain",
+        "star",
+        "dense",
+        "cycle_heavy",
+        "duplicate_edges",
+        "equal_weights",
+        "extreme_weights",
     }
 
 
 def test_derive_int_array_min_one_excludes_empty() -> None:
-    """크기 하한 1 배열 — empty(크기 0)는 제약(크기≥1) 위반이라 미방출(realizability gate)."""
+    """크기 하한 1 배열 — empty(크기 0)는 제약(크기≥1) 위반이라 미방출(realizability gate).
+    미핀 대규모 배열이라 sequence adversarial 아키타입은 전부 방출."""
     schema = _io_schema(
         IOFieldSpec(
             name="arr",
@@ -1238,7 +1299,17 @@ def test_derive_int_array_min_one_excludes_empty() -> None:
             size_range=ConstraintRange(name="arr", min_value=1, max_value=50),
         )
     )
-    assert {e.name for e in derive_edge_cases(schema)} == {"min_size", "max_size"}
+    assert {e.name for e in derive_edge_cases(schema)} == {
+        "min_size",
+        "max_size",
+        "max_stress",
+        "sorted_asc",
+        "sorted_desc",
+        "alternating",
+        "all_equal",
+        "extreme_values",
+        "single_element",
+    }
 
 
 def test_derive_int_array_min_zero_includes_empty() -> None:
@@ -1265,7 +1336,9 @@ def test_derive_tree_edges_no_disconnected() -> None:
     )
     names = {e.name for e in derive_edge_cases(schema)}
     assert "disconnected" not in names
-    assert names == {"min_size", "max_size"}  # V_min=2 트리는 간선 1개 — empty 거짓
+    # V_min=2 트리는 간선 1개 — empty 거짓. 트리엔 chain/star 만(사이클·다중간선·밀도
+    # 불가), 무가중(value_range=None)이라 가중치 아키타입도 미방출.
+    assert names == {"min_size", "max_size", "max_stress", "path_chain", "star"}
 
 
 def test_derive_tree_edges_empty_only_when_single_vertex() -> None:
@@ -1388,3 +1461,338 @@ def test_derive_degenerate_inputs_deterministic() -> None:
     # 고정 seed — reconcile 가 diff 한 입력 == edge_filler 가 채우는 입력 보장
     schema = _graph_and_query_schema(3, 12)
     assert derive_degenerate_inputs(schema) == derive_degenerate_inputs(schema)
+
+
+# ---------- adversarial 아키타입 (상용 저지 케이스 강도) ----------
+
+
+def _edge_case_text(schema: IOSchema, name: str, *, seed: int = 0) -> str:
+    """edge case 하나만 담은 contract 로 해당 카테고리 입력 텍스트를 얻는다."""
+    contract = GeneratorContract(
+        scale_families=(ScaleFamily(name="s", case_count=1),),
+        edge_cases=(EdgeCaseSpec(name=name),),
+    )
+    return next(
+        c.input_text
+        for c in generate_inputs(contract, schema, seed=seed)
+        if c.category == name
+    )
+
+
+def _plain_array(n: int) -> IOFieldSpec:
+    """크기 n 고정, 값 [-5,5], shape 미핀 int_array."""
+    return IOFieldSpec(
+        name="arr",
+        type="int_array",
+        size_range=ConstraintRange(name="arr", min_value=n, max_value=n),
+        value_range=ConstraintRange(name="v", min_value=-5, max_value=5),
+    )
+
+
+def test_path_chain_is_linear_chain() -> None:
+    schema = _io_schema(_weighted_edges_field(12, 12))
+    v, e, edges = _parse_graph(_edge_case_text(schema, "path_chain"))
+    assert v == 12 and e == v - 1
+    assert [(u, t) for u, t, _ in edges] == [(i, i + 1) for i in range(1, 12)]  # 사슬
+    assert all(2 <= w <= 9 for _, _, w in edges)  # value_range 존중
+
+
+def test_star_concentrates_on_hub() -> None:
+    schema = _io_schema(_weighted_edges_field(12, 12))
+    v, e, edges = _parse_graph(_edge_case_text(schema, "star"))
+    assert v == 12 and e == v - 1
+    assert all(u == 1 for u, _, _ in edges)  # 허브(1-indexed base) 집중
+    assert sorted(t for _, t, _ in edges) == list(range(2, 13))  # 나머지 전 정점
+
+
+def test_dense_hits_edge_count_upper() -> None:
+    schema = _io_schema(_weighted_edges_field(12, 12))
+    v, e, edges = _parse_graph(_edge_case_text(schema, "dense"))
+    assert e == 2 * v - 1  # backbone(V-1) + extra(V) — 간선 수 상한 근접
+    comps, _ = _uf_components(v, [(u, t) for u, t, _ in edges])
+    assert comps == 1  # 여전히 연결
+
+
+def test_cycle_heavy_is_chain_plus_cycles() -> None:
+    schema = _io_schema(_weighted_edges_field(12, 12))
+    v, e, edges = _parse_graph(_edge_case_text(schema, "cycle_heavy"))
+    pairs = [(u, t) for u, t, _ in edges]
+    assert pairs[: v - 1] == [(i, i + 1) for i in range(1, v)]  # 사슬 backbone
+    assert e == 2 * v - 1  # 추가 간선 v 개 — 간선당 사이클 1+
+    comps, has_cycle = _uf_components(v, pairs)
+    assert comps == 1 and has_cycle
+
+
+def test_duplicate_edges_repeats_pairs_when_multi_allowed() -> None:
+    schema = _io_schema(_weighted_edges_field(12, 12))  # shape=None → 다중간선 허용(현 상수)
+    v, e, edges = _parse_graph(_edge_case_text(schema, "duplicate_edges"))
+    pairs = [(u, t) for u, t, _ in edges]
+    assert e == 2 * v - 1  # backbone + v 개 중복 재방출
+    assert len(set(pairs)) < len(pairs)  # 같은 쌍 반복 실재
+
+
+def test_duplicate_edges_bias_respects_simple_graph_pin() -> None:
+    """multi_edges=False 핀 — 아키타입 bias 가 와도 단순 그래프 유지 (핀 승리, 방어)."""
+    field = _shaped_edges(GraphShape(directed=True, multi_edges=False), 12, 12)
+    _, _, edges = _parse_graph(_edge_case_text(_io_schema(field), "duplicate_edges"))
+    pairs = [(u, t) for u, t, _ in edges]
+    assert len(pairs) == len(set(pairs))  # 중복 없음
+
+
+def test_equal_weights_all_weights_identical() -> None:
+    schema = _io_schema(_weighted_edges_field(12, 12))
+    _, _, edges = _parse_graph(_edge_case_text(schema, "equal_weights"))
+    weights = {w for _, _, w in edges}
+    assert len(weights) == 1  # 전 간선 동일 가중치 (tie 스트레스)
+    assert all(2 <= w <= 9 for w in weights)
+
+
+def test_extreme_weights_mixes_bounds_only() -> None:
+    schema = _io_schema(_weighted_edges_field(30, 30))
+    _, _, edges = _parse_graph(_edge_case_text(schema, "extreme_weights", seed=1))
+    weights = {w for _, _, w in edges}
+    assert weights == {2, 9}  # 하한/상한만 혼재 (seed 고정 → 결정론)
+
+
+def test_tree_path_chain_and_star_shapes() -> None:
+    field = IOFieldSpec(
+        name="tree",
+        type="tree_edges",
+        size_range=ConstraintRange(name="tree", min_value=10, max_value=10),
+    )
+    chain_lines = _edge_case_text(_io_schema(field), "path_chain").split("\n")
+    assert chain_lines[0] == "10"
+    chain = [tuple(int(x) for x in ln.split()) for ln in chain_lines[1:]]
+    assert chain == [(i, i + 1) for i in range(1, 10)]  # 사슬 트리 (깊이 최대)
+    star_lines = _edge_case_text(_io_schema(field), "star").split("\n")
+    star = [tuple(int(x) for x in ln.split()) for ln in star_lines[1:]]
+    assert len(star) == 9 and all(u == 1 for u, _ in star)  # 스타 트리 (허브 집중)
+
+
+def test_sorted_asc_bias_emits_ascending() -> None:
+    vals = _array_values(_edge_case_text(_io_schema(_plain_array(10)), "sorted_asc", seed=2))
+    assert len(vals) == 10 and vals == sorted(vals)
+    assert all(-5 <= v <= 5 for v in vals)
+
+
+def test_sorted_desc_bias_emits_descending() -> None:
+    vals = _array_values(_edge_case_text(_io_schema(_plain_array(10)), "sorted_desc", seed=2))
+    assert len(vals) == 10 and vals == sorted(vals, reverse=True)
+
+
+def test_all_equal_bias_emits_identical_values() -> None:
+    vals = _array_values(_edge_case_text(_io_schema(_plain_array(10)), "all_equal", seed=2))
+    assert len(vals) == 10 and len(set(vals)) == 1
+    assert -5 <= vals[0] <= 5
+
+
+def test_alternating_bias_zigzags() -> None:
+    from ipe.v2.generation.input_gen import _zigzag
+
+    vals = _array_values(_edge_case_text(_io_schema(_plain_array(11)), "alternating", seed=3))
+    assert len(vals) == 11
+    assert vals == _zigzag(sorted(vals))  # 저-고 교대 재배치 (다중집합 불변)
+    assert vals[0] == min(vals) and vals[1] == max(vals)
+
+
+def test_single_element_bias_yields_n_one() -> None:
+    field = IOFieldSpec(
+        name="arr",
+        type="int_array",
+        size_range=ConstraintRange(name="arr", min_value=1, max_value=50),
+        value_range=ConstraintRange(name="v", min_value=-5, max_value=5),
+    )
+    text = _edge_case_text(_io_schema(field), "single_element", seed=4)
+    lines = text.split("\n")
+    assert lines[0] == "1" and len(lines[1].split()) == 1  # N=1
+
+
+def test_extreme_values_bias_uses_bounds_only() -> None:
+    vals = _array_values(
+        _edge_case_text(_io_schema(_plain_array(20)), "extreme_values", seed=5)
+    )
+    assert set(vals) == {-5, 5}  # 하한/상한 혼재 (seed 고정 → 결정론)
+
+
+def test_sorted_desc_bias_defers_to_sort_pin() -> None:
+    """non_decreasing 핀 배열에 sorted_desc bias — 핀 승리(오름차순 유지, 위반 불가)."""
+    field = _shaped_array_field(
+        SequenceShape(sortedness="non_decreasing"), size_lo=10, size_hi=10
+    )
+    vals = _array_values(_edge_case_text(_io_schema(field), "sorted_desc", seed=4))
+    assert len(vals) == 10 and vals == sorted(vals)
+
+
+def test_all_equal_bias_defers_to_distinct_pin() -> None:
+    """strictly_increasing 핀 배열에 all_equal bias — 핀 승리(순증가 distinct 유지)."""
+    field = _shaped_array_field(
+        SequenceShape(sortedness="strictly_increasing"), size_lo=10, size_hi=10
+    )
+    vals = _array_values(_edge_case_text(_io_schema(field), "all_equal", seed=4))
+    assert all(vals[i] < vals[i + 1] for i in range(len(vals) - 1))
+
+
+def test_all_same_char_bias_single_char_within_alphabet() -> None:
+    field = _shaped_string_field(StringShape(alphabet="dna"), size_lo=12, size_hi=12)
+    text = _edge_case_text(_io_schema(field), "all_same_char")
+    assert len(text) == 12 and len(set(text)) == 1
+    assert set(text) <= set("ACGT")  # alphabet 핀 존중
+
+
+def test_periodic_bias_repeats_short_period() -> None:
+    field = _shaped_string_field(StringShape(alphabet="lowercase"), size_lo=12, size_hi=12)
+    text = _edge_case_text(_io_schema(field), "periodic")
+    assert len(text) == 12
+    assert any(
+        all(text[i] == text[i % p] for i in range(len(text))) for p in (2, 3)
+    )  # 주기 2~3 반복
+
+
+def test_max_stress_guarantees_two_upper_bound_cases() -> None:
+    """max_size + max_stress — 진짜 상한(V=hi·최대 밀도) 케이스 2개 보장 (naive TLE 유도)."""
+    schema = _io_schema(_weighted_edges_field(2, 60))
+    contract = derive_generator_contract(schema)
+    cases = generate_inputs(contract, schema, seed=9)
+    upper = [c for c in cases if c.category in ("max_size", "max_stress")]
+    assert len(upper) == 2
+    for c in upper:
+        v, e, _ = _parse_graph(c.input_text)
+        assert v == 60  # size 상한 실타격
+        assert e == 2 * v - 1  # 최대 밀도
+    assert upper[0].input_text != upper[1].input_text  # 서로 다른 rng 스트림(중복 케이스 아님)
+
+
+def test_derive_small_schema_keeps_legacy_edge_set() -> None:
+    """size 상한 < _ADVERSARIAL_MIN_SIZE — 아키타입 미방출(기존 소형 suite 정책 보존)."""
+    schema = _io_schema(_weighted_edges_field(3, 8))
+    assert {e.name for e in derive_edge_cases(schema)} == {
+        "min_size",
+        "max_size",
+        "empty",
+        "disconnected",
+    }
+
+
+def test_derive_pinned_sequence_gates_conflicting_archetypes() -> None:
+    """strictly_increasing 핀 — 모순/중복 아키타입 미방출(카테고리명↔입력 정합, F18 동형)."""
+    field = _shaped_array_field(
+        SequenceShape(sortedness="strictly_increasing"), size_lo=1, size_hi=100
+    )
+    names = {e.name for e in derive_edge_cases(_io_schema(field))}
+    for banned in ("sorted_asc", "sorted_desc", "alternating", "all_equal", "extreme_values"):
+        assert banned not in names
+    assert {"max_stress", "single_element"} <= names  # 핀과 무관한 아키타입은 방출
+
+
+def test_derive_non_decreasing_allows_tie_archetypes_only() -> None:
+    """non_decreasing(중복 허용) 핀 — 재배치류 미방출, tie/극단값 아키타입은 방출."""
+    field = _shaped_array_field(
+        SequenceShape(sortedness="non_decreasing"), size_lo=1, size_hi=100
+    )
+    names = {e.name for e in derive_edge_cases(_io_schema(field))}
+    for banned in ("sorted_asc", "sorted_desc", "alternating"):
+        assert banned not in names
+    assert {"all_equal", "extreme_values"} <= names
+
+
+def test_derive_simple_graph_pin_gates_duplicate_edges() -> None:
+    """multi_edges=False 핀 — duplicate_edges 미방출, 나머지 구조 아키타입은 방출."""
+    shape = GraphShape(directed=True, multi_edges=False)
+    schema = _io_schema(_shaped_edges(shape, 2, 100))
+    names = {e.name for e in derive_edge_cases(schema)}
+    assert "duplicate_edges" not in names
+    assert {"path_chain", "star", "dense", "cycle_heavy"} <= names
+
+
+def test_derive_string_schema_emits_string_archetypes() -> None:
+    field = _shaped_string_field(StringShape(alphabet="binary"), size_lo=1, size_hi=100)
+    names = {e.name for e in derive_edge_cases(_io_schema(field))}
+    assert {"max_stress", "all_same_char", "periodic"} <= names
+
+
+def test_adversarial_contract_generation_deterministic_and_in_bounds() -> None:
+    """파생 adversarial contract 전체 — 같은 seed 재현 + 모든 케이스가 제약 내(V/가중치/참조)."""
+    schema = _graph_and_query_schema(2, 40)
+    contract = derive_generator_contract(schema)
+    a = generate_inputs(contract, schema, seed=13)
+    b = generate_inputs(contract, schema, seed=13)
+    assert [c.input_text for c in a] == [c.input_text for c in b]  # 결정론
+    assert len(a) == contract.total_planned_cases
+    for c in a:
+        lines = c.input_text.split("\n")
+        v, e = (int(x) for x in lines[0].split())
+        assert 2 <= v <= 40  # size_range 존중
+        for ln in lines[1 : 1 + e]:
+            u, t, w = (int(x) for x in ln.split())
+            assert 1 <= u <= v and 1 <= t <= v and u != t  # 1-indexed·self-loop 없음
+            assert 1 <= w <= 9  # value_range 존중
+        s, t2 = _query_value(c.input_text, 0), _query_value(c.input_text, 1)
+        assert 1 <= s <= v and 1 <= t2 <= v  # 참조 스칼라 실제 V 바인딩
+
+
+# ---------- 아키타입 최소 크기 보장 (카테고리명↔입력 정합 — 크기 1 추첨 fallback 수선) ----------
+
+
+def test_duplicate_edges_guaranteed_with_size_lower_bound_one() -> None:
+    """크기 하한 1 스키마 — V=1 추첨이 나와도 하한 2 클램프로 다중 간선 **항상** 실재."""
+    schema = _io_schema(_weighted_edges_field(1, 12))
+    for seed in range(12):
+        v, _, edges = _parse_graph(_edge_case_text(schema, "duplicate_edges", seed=seed))
+        pairs = [(u, t) for u, t, _ in edges]
+        assert v >= 2  # V=1 fallback 불가 (하한 2 클램프)
+        assert len(set(pairs)) < len(pairs)  # 같은 쌍 반복이 모든 seed 에서 실재
+
+
+def test_periodic_guaranteed_min_length_two() -> None:
+    """크기 하한 1 문자열 — 길이 1 추첨이 나와도 하한 2 클램프로 주기 반복 항상 실재."""
+    field = _shaped_string_field(StringShape(alphabet="lowercase"), size_lo=1, size_hi=12)
+    for seed in range(12):
+        text = _edge_case_text(_io_schema(field), "periodic", seed=seed)
+        n = len(text)
+        assert n >= 2  # 길이 1 fallback 불가
+        assert any(
+            all(text[i] == text[i % p] for i in range(n)) for p in (2, 3)
+        )  # 주기 2~3 반복이 모든 seed 에서 실재
+
+
+def test_pairwise_sequence_archetypes_guarantee_min_two_elements() -> None:
+    """교대/혼재/tie 아키타입 — 원소 2+ 전제라 크기 하한 1 스키마에서도 N≥2 보장."""
+    field = IOFieldSpec(
+        name="arr",
+        type="int_array",
+        size_range=ConstraintRange(name="arr", min_value=1, max_value=12),
+        value_range=ConstraintRange(name="v", min_value=-5, max_value=5),
+    )
+    for name in ("alternating", "extreme_values", "all_equal"):
+        for seed in range(8):
+            vals = _array_values(_edge_case_text(_io_schema(field), name, seed=seed))
+            assert len(vals) >= 2, (name, seed)
+
+
+def test_graph_archetypes_guarantee_min_two_vertices() -> None:
+    """graph 구조 아키타입 전부 — V=1 은 간선 0(공허)이라 하한 2 클램프로 간선 1+ 보장."""
+    schema = _io_schema(_weighted_edges_field(1, 12))
+    for name in ("path_chain", "star", "dense", "cycle_heavy", "equal_weights"):
+        for seed in range(6):
+            v, e, _ = _parse_graph(_edge_case_text(schema, name, seed=seed))
+            assert v >= 2 and e >= 1, (name, seed)
+
+
+def test_tree_archetypes_guarantee_min_two_vertices() -> None:
+    """사슬/스타 트리 — 크기 하한 1 스키마에서도 V≥2 (단일 정점 '1' fallback 불가)."""
+    field = IOFieldSpec(
+        name="tree",
+        type="tree_edges",
+        size_range=ConstraintRange(name="V", min_value=1, max_value=12),
+    )
+    for name in ("path_chain", "star"):
+        for seed in range(6):
+            lines = _edge_case_text(_io_schema(field), name, seed=seed).split("\n")
+            assert int(lines[0]) >= 2 and len(lines) >= 2, (name, seed)
+
+
+def test_archetype_floor_skipped_when_size_upper_is_one() -> None:
+    """size 상한 1 스키마 — 클램프 불가(범위 위반 금지) → 기본 경로 fallback 유지 (방어)."""
+    schema = _io_schema(_weighted_edges_field(1, 1))
+    v, e, _ = _parse_graph(_edge_case_text(schema, "duplicate_edges", seed=0))
+    assert v == 1 and e == 0  # size_range 위반 없이 fallback

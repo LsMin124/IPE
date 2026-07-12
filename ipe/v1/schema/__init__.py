@@ -32,6 +32,7 @@ from .problem_spec import (
     is_basic,
 )
 from .qa import QAFinding, QAReport, QAReview, QAReviewerKind, QASeverity
+from .sample_explanation import SampleExplanations
 from .solution_attempt import Lesson, SolutionAttempt
 from .synthesis import ReconciliationResult, SolutionCandidate
 from .test_suite import (
@@ -88,6 +89,7 @@ __all__ = [
     "QASeverity",
     "ReconciliationResult",
     "ResolvedEdgeCase",
+    "SampleExplanations",
     "SampleResult",
     "SampleTestCase",
     "ScaleFamily",

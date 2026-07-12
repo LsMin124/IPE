@@ -1,7 +1,7 @@
 """QA/Critic 스테이지 아티팩트 (Phase 3 M5 — RFC N10/N11).
 
-suite 까지 완성된 문제 패키지(narrative+spec+test_suite)를 4 관점의 병렬 QA 리뷰어
-(N10a-d: 모호성/공정성/유출/난이도)가 검토하고, deterministic aggregator(N11)가
+suite 까지 완성된 문제 패키지(narrative+spec+test_suite)를 5 관점의 병렬 QA 리뷰어
+(N10a-e: 모호성/공정성/유출/난이도/지문품질)가 검토하고, deterministic aggregator(N11)가
 집계해 출하 게이트를 친다.
 
 artifacts:
@@ -22,7 +22,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-QAReviewerKind = Literal["ambiguity", "fairness", "leakage", "difficulty"]
+# presentation(지문 품질 — 문체·구성)은 상용 저지 수준 작문 게이트 (N10e, additive).
+QAReviewerKind = Literal[
+    "ambiguity", "fairness", "leakage", "difficulty", "presentation"
+]
 QASeverity = Literal["info", "warning", "blocker"]
 
 
@@ -36,7 +39,7 @@ class QAFinding(BaseModel):
 
 
 class QAReview(BaseModel):
-    """QA 리뷰어 1종(N10a-d)의 판정.
+    """QA 리뷰어 1종(N10a-e)의 판정.
 
     ``passed=True`` 와 blocker finding 의 공존은 모순 — LLM 이 산출한 판정의
     내적 일관성을 schema 가 강제한다 (왜곡된 구조화 출력 조기 reject).

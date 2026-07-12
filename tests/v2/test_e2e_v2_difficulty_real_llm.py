@@ -11,6 +11,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from ipe.v1.schema.difficulty import _TIERS
@@ -50,6 +52,10 @@ _DIJKSTRA_PACKAGE = {
 
 
 @pytest.mark.e2e
+@pytest.mark.skipif(
+    not os.environ.get("ANTHROPIC_API_KEY"),
+    reason="ANTHROPIC_API_KEY missing — real LLM e2e skipped",
+)
 def test_real_llm_calibrates_dijkstra_to_valid_tier() -> None:
     from ipe.v2.difficulty import AnthropicDifficultyLLM, evaluate_difficulty
 

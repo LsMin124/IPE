@@ -68,6 +68,9 @@ _DOMAIN_PALETTE_SIZE = 7
 
 # 위장 도메인 후보 pool — 알고리즘과 무관하게 시나리오를 호스팅할 수 있는 distinct 한
 # 현실 도메인들. 'finance' 도 한 후보로 포함(banishing 아닌 분산 — over-correction 회피).
+# 21→42 확장(지문 품질): 스토리 친화적(작은 이야기가 데이터 의미와 자연스럽게 맞물리는)
+# 도메인만 추가 — pool 이 넓을수록 run 간 도메인 반복이 줄어 고전 동형 인식(leakage)과
+# 지문 매너리즘이 함께 분산된다. 팔레트 크기(_DOMAIN_PALETTE_SIZE)·sha256 회전은 불변.
 _DOMAIN_POOL: tuple[str, ...] = (
     "logistics",
     "healthcare",
@@ -90,6 +93,27 @@ _DOMAIN_POOL: tuple[str, ...] = (
     "media-streaming",
     "disaster-response",
     "finance",
+    "archaeology",
+    "sports-analytics",
+    "music-production",
+    "library-science",
+    "meteorology",
+    "aviation",
+    "marine-biology",
+    "film-production",
+    "culinary",
+    "textile",
+    "mining",
+    "water-management",
+    "postal-service",
+    "museum-curation",
+    "theme-park",
+    "publishing",
+    "brewing",
+    "beekeeping",
+    "waste-management",
+    "event-planning",
+    "wildlife-conservation",
 )
 
 
