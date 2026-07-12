@@ -885,6 +885,34 @@ def test_render_constraints_includes_vertex_count_and_weight() -> None:
     assert "w" in cons  # 가중치 누락 안 함
 
 
+def test_render_constraints_emits_edge_count_bound_for_weighted_edges() -> None:
+    """weighted_edges 는 E(간선 수) 상한을 렌더 — 생성기 실상한 backbone(V-1)+
+    extra(≤V)=2V-1 < 2V 의 코드 파생. E 상한이 constraints 에 없으면 solver 가
+    복잡도 설계를 못 해 QA ambiguity blocker (run v2-b4fd4625 실측). tree_edges 는
+    E=V-1 이 자명해 별도 행 없음."""
+    schema = _graph_and_query_schema(2, 5000)
+    cons = {c.name: c for c in render_constraints(schema)}
+    assert "E" in cons
+    assert cons["E"].min_value == 0
+    assert cons["E"].max_value == 10000  # numeric fallback = 2 × V상한
+    assert format_constraint(cons["E"]) == "E ∈ [0, 2V]"  # 기호 렌더
+    tree = IOSchema(
+        inputs=(
+            IOFieldSpec(
+                name="hierarchy",
+                type="tree_edges",
+                size_range=ConstraintRange(
+                    name="hierarchy", min_value=2, max_value=100
+                ),
+                value_range=ConstraintRange(name="w", min_value=1, max_value=9),
+            ),
+        ),
+        output_type="int",
+        output_format="x",
+    )
+    assert "E" not in {c.name for c in render_constraints(tree)}
+
+
 def test_render_constraints_binds_reference_to_collection_max() -> None:
     schema = _graph_and_query_schema(2, 5000)
     cons = {c.name: c for c in render_constraints(schema)}

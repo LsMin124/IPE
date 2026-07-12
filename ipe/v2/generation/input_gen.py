@@ -446,6 +446,21 @@ def render_constraints(io_schema: IOSchema) -> list[ConstraintRange]:
                     description=f"{f.name} 의 {label}",
                 )
             )
+            if f.type == "weighted_edges":
+                # E(간선 수) 상한 — 생성기 실상한에서 코드 파생: backbone(V-1) +
+                # extra(_extra_edge_count ≤ V) = 2V-1 < 2V (duplicate_edges 포함 전
+                # bias). E 상한이 constraints 에 없으면 solver 가 복잡도 설계를 못 해
+                # QA ambiguity blocker (run v2-b4fd4625 실측). tree_edges 는 E=V-1
+                # 이 input_format 트리 서술로 자명해 별도 행을 만들지 않는다.
+                out.append(
+                    ConstraintRange(
+                        name="E",
+                        min_value=0,
+                        max_value=2 * f.size_range.max_value,
+                        symbolic_max="2V",
+                        description=f"{f.name} 의 간선 수",
+                    )
+                )
         if f.cols_range is not None:
             out.append(
                 ConstraintRange(
