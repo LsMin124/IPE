@@ -850,21 +850,41 @@ def generate_inputs(
     io_schema: IOSchema,
     *,
     seed: int,
+    distinct_index_refs: bool = False,
 ) -> tuple[GeneratedTestCase, ...]:
     """contract + io_schema → 결정론 입력들 (expected=None pending).
 
     scale_families 각 tier 에서 ``case_count`` 개 + edge_cases 각 1 개. category 는
     출처(tier/edge name). 같은 seed → 같은 결과.
+
+    ``distinct_index_refs=True`` 면 같은 collection 을 가리키는 **index 참조 스칼라**
+    들(s·t 류)이 대상 크기 ≥2 일 때 서로 다른 값을 갖도록 산술 회피한다 — spec_bridge
+    **샘플 전용** (작은 샘플 클램프에서 s==t 충돌이 잦아 '핵심 로직을 시연하는 샘플이
+    없다'는 QA blocker, run v2-54d68df4 실측). rng 추가 소비 없음 — 기본 False 경로는
+    채점셋 결정론을 byte-identical 로 보존한다 (채점셋은 s==t 퇴화 커버리지가 필요해
+    이 플래그를 쓰지 않는다).
     """
     rng = random.Random(seed)
     cases: list[GeneratedTestCase] = []
     for family in contract.scale_families:
         tier_bounds = {cr.name: cr for cr in family.field_bounds}
         for _ in range(family.case_count):
-            text = _serialize_inputs(io_schema, tier_bounds, rng, bias="random")
+            text = _serialize_inputs(
+                io_schema,
+                tier_bounds,
+                rng,
+                bias="random",
+                distinct_index_refs=distinct_index_refs,
+            )
             cases.append(GeneratedTestCase(input_text=text, category=family.name))
     for edge in contract.edge_cases:
-        text = _serialize_inputs(io_schema, {}, rng, bias=_edge_bias(edge.name))
+        text = _serialize_inputs(
+            io_schema,
+            {},
+            rng,
+            bias=_edge_bias(edge.name),
+            distinct_index_refs=distinct_index_refs,
+        )
         cases.append(GeneratedTestCase(input_text=text, category=edge.name))
     return tuple(cases)
 
@@ -880,9 +900,13 @@ def _serialize_inputs(
     rng: random.Random,
     *,
     bias: _Bias,
+    distinct_index_refs: bool = False,
 ) -> str:
     """2-pass — 비참조 필드 먼저(실제 addressable 크기 기록) → 참조 스칼라를 그 크기에
     바인딩. 참조 없는 schema 는 1-pass 와 동일 rng 순서(기존 출력 보존). 선언 순서로 join.
+
+    ``distinct_index_refs`` 는 같은 collection 대상 index 참조들의 값 충돌을 **rng 추가
+    소비 없이** 산술 오프셋으로 회피한다 (``generate_inputs`` docstring 참조 — 샘플 전용).
     """
     indexing = io_schema.indexing  # F9 단일 진실원천 (정점/원소 참조 인덱싱 base)
     texts: dict[str, str] = {}
@@ -898,9 +922,29 @@ def _serialize_inputs(
         texts[f.name] = text
         if size is not None:
             sizes[f.name] = size
+    used_refs: dict[str, set[int]] = {}
     for f in deferred:
         ref_size = sizes.get(f.references) if f.references is not None else None
-        texts[f.name] = _serialize_reference(ref_size, bias, rng, indexing=indexing)
+        text = _serialize_reference(ref_size, bias, rng, indexing=indexing)
+        if (
+            distinct_index_refs
+            and f.references is not None
+            and f.reference_kind != "cardinality"
+            and ref_size is not None
+            and ref_size >= 2
+        ):
+            used = used_refs.setdefault(f.references, set())
+            val = int(text)
+            if val in used:
+                # 충돌 — 같은 [base, base+size-1] 범위 안에서 순환 오프셋 (rng 미소비).
+                lo, hi = indexing, indexing + ref_size - 1
+                for _ in range(ref_size):
+                    val = val + 1 if val < hi else lo
+                    if val not in used:
+                        break
+                text = str(val)
+            used.add(val)
+        texts[f.name] = text
     return "\n".join(texts[f.name] for f in io_schema.inputs)
 
 

@@ -137,7 +137,12 @@ def _generate_sample_inputs(
             ScaleFamily(name="sample", case_count=_SAMPLE_COUNT, field_bounds=bounds),
         )
     )
-    cases = generate_inputs(contract, schema, seed=seed_from_run_id(run_id))
+    # distinct_index_refs — 샘플은 s==t 충돌을 회피해 핵심 로직(경로 탐색 등)을 실제로
+    # 시연한다 (전 샘플 s==t 로 '항상 0 출력' trivial 해석이 가능하던 QA blocker,
+    # run v2-54d68df4 실측). 퇴화 의미 시연은 아래 degenerate 교체 샘플이 전담.
+    cases = generate_inputs(
+        contract, schema, seed=seed_from_run_id(run_id), distinct_index_refs=True
+    )
     texts = [c.input_text for c in cases]
     if _has_edge_semantics(output_invariants):
         # 원본 io_schema 로 파생 — 퇴화 입력은 이미 최소 규모(min/unreachable)라 clamp

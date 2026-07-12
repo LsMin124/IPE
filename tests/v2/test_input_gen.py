@@ -885,6 +885,28 @@ def test_render_constraints_includes_vertex_count_and_weight() -> None:
     assert "w" in cons  # 가중치 누락 안 함
 
 
+def test_distinct_index_refs_avoids_sample_collision() -> None:
+    """``distinct_index_refs=True`` — 같은 collection 을 가리키는 index 참조(s·t)가
+    크기 ≥2 에서 서로 다른 값을 갖는다 (전 샘플 s==t 로 핵심 로직 시연 샘플이 없던
+    QA blocker, run v2-54d68df4 실측). 기본 False 는 기존 출력 byte-identical."""
+    schema = _graph_and_query_schema(2, 3)  # V∈[2,3] — 충돌 확률 최대 구간
+    contract = derive_generator_contract(schema)
+    for seed in range(20):
+        for case in generate_inputs(
+            contract, schema, seed=seed, distinct_index_refs=True
+        ):
+            s = _query_value(case.input_text, 0)
+            t = _query_value(case.input_text, 1)
+            assert s != t, f"seed={seed} category={case.category}: s==t=={s}"
+    # 기본(False) 경로 무회귀 — 같은 seed 에서 flag 유무와 무관하게 동일 출력.
+    base = [c.input_text for c in generate_inputs(contract, schema, seed=7)]
+    off = [
+        c.input_text
+        for c in generate_inputs(contract, schema, seed=7, distinct_index_refs=False)
+    ]
+    assert base == off
+
+
 def test_render_constraints_emits_edge_count_bound_for_weighted_edges() -> None:
     """weighted_edges 는 E(간선 수) 상한을 렌더 — 생성기 실상한 backbone(V-1)+
     extra(≤V)=2V-1 < 2V 의 코드 파생. E 상한이 constraints 에 없으면 solver 가
