@@ -66,6 +66,23 @@ def test_coder_parse_discipline_prompt_has_no_stray_variables() -> None:
         ))
 
 
+def test_coder_brute_mode_prompt_has_no_stray_variables() -> None:
+    """W2A: brute 검산자 prompt(_BRUTE_SYSTEM_PROMPT ± 파싱 규율)도 동일 무결성 —
+    brute_mode 조합 전부에서 {'user'} 외 템플릿 변수가 없어야 한다."""
+    from ipe.v1.nodes.coder import _coder_system_prompt
+
+    for flag in (True, False):
+        template = ChatPromptTemplate.from_messages(
+            [
+                ("system", _coder_system_prompt(flag, brute_mode=True)),
+                ("user", "{user}"),
+            ]
+        )
+        assert set(template.input_variables) == {"user"}, (flag, sorted(
+            template.input_variables
+        ))
+
+
 def test_qa_reviewer_rendered_prompts_have_no_stray_variables() -> None:
     """qa_reviewer 는 kind 별 charter 를 Python .format 으로 선렌더 — 렌더 결과가
     템플릿을 통과할 때도 동일 무결성이 성립해야 한다."""

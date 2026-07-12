@@ -19,18 +19,25 @@ if TYPE_CHECKING:
 
 # --------------------------------------------------------------------------- #
 # Phase 4 — P1/P2 생성 파이프라인 모드 (정확히 2개로 수렴)                        #
-#   P1: 타겟 고정·단일(합성X)·공개(비은닉)·QA 3종(leakage 제외 — 타겟 공개라      #
+#   P1: 타겟 고정·단일(합성X)·공개(비은닉)·QA 4종(leakage 제외 — 타겟 공개라      #
 #       유명문제 동형 게이트 부적합).                                            #
-#   P2: 타겟 힌트·2+ 합성·은닉·QA 4종(leakage 포함).                             #
+#   P2: 타겟 힌트·2+ 합성·은닉·QA 5종(leakage 포함).                             #
+#   presentation(지문 품질, N10e)은 두 모드 공통 — 상용 저지 수준 작문 게이트.     #
 # --------------------------------------------------------------------------- #
 PipelineMode = Literal["p1", "p2"]
 
-QA_KINDS_P1: tuple[QAReviewerKind, ...] = ("ambiguity", "fairness", "difficulty")
+QA_KINDS_P1: tuple[QAReviewerKind, ...] = (
+    "ambiguity",
+    "fairness",
+    "difficulty",
+    "presentation",
+)
 QA_KINDS_P2: tuple[QAReviewerKind, ...] = (
     "ambiguity",
     "fairness",
     "leakage",
     "difficulty",
+    "presentation",
 )
 
 
@@ -60,7 +67,7 @@ ABSTRACT_DOMAIN = "abstract"
 # 모델명 (golden / brute) — 교체 시 여기 한 곳만                                  #
 # --------------------------------------------------------------------------- #
 GOLDEN_MODELS: tuple[str, ...] = ("claude-opus-4-8", "claude-sonnet-4-6")
-BRUTE_MODEL = "claude-sonnet-4-6"  # golden 과 distinct → 독립 differential
+BRUTE_MODEL = "claude-sonnet-4-6"  # == GOLDEN_MODELS[1] — 독립성은 brute_mode 프롬프트 격리로 확보
 GOLDEN_MODELS_CLI_DEFAULT = ",".join(GOLDEN_MODELS)  # argparse comma-sep default
 
 # 난이도 calibration 모델 (RFC R4 — 사후 난이도 판별). QA Sonnet 승급과 동일 논리:
@@ -79,10 +86,15 @@ MAX_ITERATIONS_API = 4  # API: 비용·지연 상한으로 더 낮게 (의도적
 #   API: 고정 상한                                                              #
 # --------------------------------------------------------------------------- #
 RECURSION_PAD_BASE = 15
-RECURSION_PAD_SYNTHESIS = 12
+# synthesis tail — sample_explainer(W2B 예제 설명, 활성 시 sample_filler 뒤 +1 step)
+# 포함 13 (기존 12 + 1).
+RECURSION_PAD_SYNTHESIS = 13
 RECURSION_PAD_SUITE = 6
+# QA 리뷰어 fan-out 은 병렬 1 superstep — 리뷰어 5종으로 늘어도 step 수 불변이라
+# pad 는 fan-out 크기에 민감하지 않다 (routeback 라운드 수에만 비례).
 RECURSION_PAD_QA = 14
-RECURSION_LIMIT_API = 90
+# API 고정 상한 — sample_explainer 활성(+1 step) 반영 91 (기존 90 + 1).
+RECURSION_LIMIT_API = 91
 
 # --------------------------------------------------------------------------- #
 # 토큰 단가 (USD per 1M tokens; input, output) — 비용 실측 정정(계약 §5, 5fb370f)  #

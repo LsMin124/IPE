@@ -9,9 +9,10 @@ env: ``ANTHROPIC_API_KEY`` (production LLM calls).
 
 두 모드 다 **full 파이프라인**(synthesis+verification+풀 채점셋+QA)을 태운다 — 차이는
 모드 노브뿐(``config.mode_knobs``):
-- ``--mode p1`` (단일·공개): composition 빈값·hidden=False·QA 3종(leakage 제외).
-  타겟 알고리즘 고정 공개(토픽 드릴).
-- ``--mode p2`` (합성·은닉, 기본): composition≥1·hidden=True·QA 4종. 타겟은 힌트(은닉).
+- ``--mode p1`` (단일·공개): composition 빈값·hidden=False·QA 4종(presentation 포함,
+  leakage 제외). 타겟 알고리즘 고정 공개(토픽 드릴).
+- ``--mode p2`` (합성·은닉, 기본): composition≥1·hidden=True·QA 5종(+leakage).
+  타겟은 힌트(은닉).
 
 흐름: strategist→formalizer→narrative→faithfulness → spec_bridge → designer →
 golden×K/brute fan-out → reconcile → executor → 풀 채점셋 → QA 게이트. golden 은
@@ -41,7 +42,8 @@ from .state import DEFAULT_MAX_ITERATIONS, V2State, initial_v2_state
 # recursion budget pad — 값은 config 단일 소스. 주석은 각 pad 의 근거(스테이지 tail).
 # 모델링 루프 1회 = narrative+faithfulness+regen(3 step).
 _RECURSION_PAD = config.RECURSION_PAD_BASE
-# synthesis tail(spec_bridge→designer→fan-out→reconcile→bridge→executor) 단발 step.
+# synthesis tail(spec_bridge→designer→fan-out→reconcile→bridge→sample_filler→
+# [sample_explainer]→edge_filler→executor) 단발 step — 예제 설명 활성 시 +1 포함.
 _SYNTHESIS_RECURSION_PAD = config.RECURSION_PAD_SYNTHESIS
 # suite tail(generator_designer→input_generator→suite_assembler) 단발 step.
 _SUITE_RECURSION_PAD = config.RECURSION_PAD_SUITE
@@ -91,10 +93,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "--mode",
         choices=["p1", "p2"],
         default="p2",
-        help="생성 모드 (p1=단일·공개·QA3 / p2=합성·은닉·QA4, default: p2)",
+        help="생성 모드 (p1=단일·공개·QA4 / p2=합성·은닉·QA5, default: p2)",
     )
     parser.add_argument(
         "--verbose", action="store_true", help="blueprint/narrative 전체 출력"
+    )
+    parser.add_argument(
+        "--no-sample-explanations",
+        action="store_true",
+        help="예제 설명(sample_explainer, BOJ '예제 설명') 저작 끄기 (기본: 켜짐)",
     )
     parser.add_argument(
         "--golden-models",
@@ -225,11 +232,16 @@ def _build_default_graph(args: argparse.Namespace) -> Any:
         golden_llms=[
             AnthropicCoderLLM(m, parse_discipline=True) for m in golden_models
         ],
-        brute_llm=AnthropicCoderLLM(args.brute_model, parse_discipline=True),
+        brute_llm=AnthropicCoderLLM(
+            args.brute_model, parse_discipline=True, brute_mode=True
+        ),
         golden_origins=golden_models,
         with_test_suite=True,
         with_qa=True,
         qa_kinds=qa_kinds,
+        # 예제 설명(W2B) — 기본 켜짐(--no-sample-explanations 로 옵트아웃). LLM None
+        # 은 graph→node factory 의 production Sonnet 배선.
+        with_sample_explanations=not args.no_sample_explanations,
         # suite/qa 노드 LLM 은 None → graph 의 production default(Opus/Haiku) 배선
     )
 

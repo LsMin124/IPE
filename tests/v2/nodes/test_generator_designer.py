@@ -77,7 +77,8 @@ def test_generator_designer_projects_scalar_schema() -> None:
 
 
 def test_generator_designer_projects_graph_schema() -> None:
-    """graph schema → small/large scale tier + 실현가능 edge(min/max/empty/disconnected)."""
+    """대규모 graph schema → small/large scale tier + 실현가능 edge(min/max/empty/
+    disconnected) + adversarial 아키타입(max_stress·구조·가중치 — 상용 저지 케이스 강도)."""
     out = make_generator_designer_node()(_state(_graph_schema()))
 
     contract = out.generator_contract
@@ -88,7 +89,17 @@ def test_generator_designer_projects_graph_schema() -> None:
         "max_size",
         "empty",
         "disconnected",
+        "max_stress",
+        "path_chain",
+        "star",
+        "dense",
+        "cycle_heavy",
+        "duplicate_edges",
+        "equal_weights",
+        "extreme_weights",
     }
+    # boundary/퇴화 4 + max_stress 1 + 아키타입 7 = edge 12, tier 5 → 17 케이스 계획
+    assert contract.total_planned_cases == 17
 
 
 def test_generator_designer_requires_blueprint() -> None:

@@ -225,3 +225,25 @@ def test_narrative_abstract_prompt_drops_domain_story() -> None:
     assert "지어내지 말 것" in _ABSTRACT_SYSTEM_PROMPT  # 현실 상황 날조 금지
     assert "A 와 B" in _ABSTRACT_SYSTEM_PROMPT  # 변수 직접 서술 예시
     assert _ABSTRACT_SYSTEM_PROMPT != _SYSTEM_PROMPT  # 도메인 시나리오 prompt 와 다름
+
+
+def test_narrative_prompt_has_craft_bar() -> None:
+    """지문 품질: 규율(음성 제약)만으로는 밋밋한 지문 — BOJ 상용 수준의 양성 작문
+    기준(구성/문체/분량/몰입/제목) 섹션이 규율 뒤에 존재해야 한다. 드리프트 방지."""
+    from ipe.v2.nodes.narrative import _SYSTEM_PROMPT
+
+    assert "작문 품질 (BOJ 상용 수준)" in _SYSTEM_PROMPT  # 섹션 라벨
+    assert _SYSTEM_PROMPT.index("규율:") < _SYSTEM_PROMPT.index("작문 품질")  # 규율 뒤
+    assert "2~4문단" in _SYSTEM_PROMPT  # 구성
+    assert "번역투" in _SYSTEM_PROMPT  # 문체 — 기계 문체 금지
+    assert "용어 드리프트 금지" in _SYSTEM_PROMPT  # 명칭 일관
+    assert "300~800자" in _SYSTEM_PROMPT  # 분량
+
+
+def test_narrative_abstract_prompt_has_craft_bar() -> None:
+    """초급 abstract 도 작문 품질 섹션 보유 — 1~2문단, 교과서처럼 평이, 모호함 zero."""
+    from ipe.v2.nodes.narrative import _ABSTRACT_SYSTEM_PROMPT
+
+    assert "작문 품질" in _ABSTRACT_SYSTEM_PROMPT
+    assert "1~2문단" in _ABSTRACT_SYSTEM_PROMPT
+    assert "번역투" in _ABSTRACT_SYSTEM_PROMPT

@@ -11,6 +11,28 @@
     }
   },
   {
+    "id": "bj_2557_bronze5",
+    "label": "Bronze V",
+    "summary": "Hello World! 고정 문자열 한 줄 출력 (출력문)",
+    "factors": {
+      "algorithm": "implementation",
+      "n_max": null,
+      "complexity": "O(1)",
+      "data_structures": []
+    }
+  },
+  {
+    "id": "bj_2753_bronze5",
+    "label": "Bronze V",
+    "summary": "윤년 판정 — 4/100/400 배수 조건 분기 (조건문)",
+    "factors": {
+      "algorithm": "implementation",
+      "n_max": null,
+      "complexity": "O(1)",
+      "data_structures": []
+    }
+  },
+  {
     "id": "bj_2562_bronze3",
     "label": "Bronze III",
     "summary": "9개 수 중 최댓값과 그 위치 출력 (배열 순회)",
@@ -44,6 +66,28 @@
     }
   },
   {
+    "id": "bj_1546_bronze1",
+    "label": "Bronze I",
+    "summary": "최댓값 기준으로 점수를 조작한 새 평균 계산 (배열 순회 + 산술)",
+    "factors": {
+      "algorithm": "implementation",
+      "n_max": 1000,
+      "complexity": "O(N)",
+      "data_structures": ["array"]
+    }
+  },
+  {
+    "id": "bj_2609_bronze1",
+    "label": "Bronze I",
+    "summary": "두 수의 최대공약수·최소공배수 — 유클리드 호제법",
+    "factors": {
+      "algorithm": "euclidean_gcd",
+      "n_max": 10000,
+      "complexity": "O(log N)",
+      "data_structures": []
+    }
+  },
+  {
     "id": "bj_2751_silver5",
     "label": "Silver V",
     "summary": "N개 정수 정렬 (N ≤ 1,000,000, 효율적 정렬 필요)",
@@ -61,6 +105,17 @@
     "factors": {
       "algorithm": "greedy",
       "n_max": 10,
+      "complexity": "O(N)",
+      "data_structures": []
+    }
+  },
+  {
+    "id": "bj_2839_silver4",
+    "label": "Silver IV",
+    "summary": "설탕 N kg 을 3/5kg 봉지 최소 개수로 배달 — 그리디/완전탐색 (N ≤ 5000)",
+    "factors": {
+      "algorithm": "greedy",
+      "n_max": 5000,
       "complexity": "O(N)",
       "data_structures": []
     }
@@ -88,6 +143,17 @@
     }
   },
   {
+    "id": "bj_11726_silver3",
+    "label": "Silver III",
+    "summary": "2×n 타일링 경우의 수 — 피보나치형 점화 DP (N ≤ 1000, mod 10007)",
+    "factors": {
+      "algorithm": "dp",
+      "n_max": 1000,
+      "complexity": "O(N)",
+      "data_structures": ["array"]
+    }
+  },
+  {
     "id": "bj_1012_silver2",
     "label": "Silver II",
     "summary": "격자 연결 요소 개수 — BFS/DFS flood fill (≤ 50×50)",
@@ -110,6 +176,28 @@
     }
   },
   {
+    "id": "bj_1697_silver1",
+    "label": "Silver I",
+    "summary": "수직선 숨바꼭질 최소 시간 — 상태공간 BFS (N, K ≤ 100,000)",
+    "factors": {
+      "algorithm": "bfs",
+      "n_max": 100000,
+      "complexity": "O(N)",
+      "data_structures": ["queue", "visited_array"]
+    }
+  },
+  {
+    "id": "bj_1149_silver1",
+    "label": "Silver I",
+    "summary": "RGB거리 — 인접 집과 색이 다르게 칠하는 최소 비용 DP (N ≤ 1000)",
+    "factors": {
+      "algorithm": "dp",
+      "n_max": 1000,
+      "complexity": "O(N)",
+      "data_structures": ["array"]
+    }
+  },
+  {
     "id": "bj_1916_gold5",
     "label": "Gold V",
     "summary": "단일 출발점 최소비용 — 다익스트라 (V ≤ 1000, E ≤ 100000)",
@@ -129,6 +217,28 @@
       "n_max": 100,
       "complexity": "O(N*K)",
       "data_structures": ["array"]
+    }
+  },
+  {
+    "id": "bj_7576_gold5",
+    "label": "Gold V",
+    "summary": "토마토 전체가 익는 최소 일수 — 다중 시작점 BFS (격자 ≤ 1000×1000)",
+    "factors": {
+      "algorithm": "multi_source_bfs",
+      "n_max": 1000000,
+      "complexity": "O(N*M)",
+      "data_structures": ["grid", "queue"]
+    }
+  },
+  {
+    "id": "bj_1717_gold5",
+    "label": "Gold V",
+    "summary": "합집합·같은 집합 판별 쿼리 — 유니온파인드 경로압축 (N ≤ 1,000,000, M ≤ 100,000)",
+    "factors": {
+      "algorithm": "union_find",
+      "n_max": 1000000,
+      "complexity": "O(α(N)) per query",
+      "data_structures": ["union_find"]
     }
   },
   {
@@ -187,6 +297,17 @@
     }
   },
   {
+    "id": "bj_12015_gold2",
+    "label": "Gold II",
+    "summary": "가장 긴 증가하는 부분 수열 길이 — 이분탐색 LIS (N ≤ 1,000,000)",
+    "factors": {
+      "algorithm": "lis_binary_search",
+      "n_max": 1000000,
+      "complexity": "O(N log N)",
+      "data_structures": ["array"]
+    }
+  },
+  {
     "id": "bj_2042_gold1",
     "label": "Gold I",
     "summary": "갱신 있는 구간 합 — 세그먼트 트리/펜윅 (N ≤ 1,000,000, 쿼리 ≤ 10000)",
@@ -209,14 +330,157 @@
     }
   },
   {
-    "id": "bj_1761_platinum5",
+    "id": "bj_11438_platinum5",
     "label": "Platinum V",
-    "summary": "트리 두 정점 거리 쿼리 — LCA 희소 배열 (N ≤ 40000, M ≤ 10000)",
+    "summary": "두 정점의 최소 공통 조상(LCA) 다수 쿼리 — 희소 배열 이진 리프팅 (N ≤ 100,000, M ≤ 100,000)",
     "factors": {
       "algorithm": "lca_sparse_table",
-      "n_max": 40000,
+      "n_max": 100000,
       "complexity": "O((N+M) log N)",
       "data_structures": ["sparse_table", "tree"]
+    }
+  },
+  {
+    "id": "bj_1786_platinum5",
+    "label": "Platinum V",
+    "summary": "텍스트 내 패턴 등장 위치 전부 탐색 — KMP 실패함수 (|T| ≤ 1,000,000)",
+    "factors": {
+      "algorithm": "kmp",
+      "n_max": 1000000,
+      "complexity": "O(N+M)",
+      "data_structures": ["failure_function"]
+    }
+  },
+  {
+    "id": "bj_2150_platinum5",
+    "label": "Platinum V",
+    "summary": "방향그래프 강한연결요소(SCC) 분해 — 타잔/코사라주 (V ≤ 10000, E ≤ 100000)",
+    "factors": {
+      "algorithm": "scc",
+      "n_max": 10000,
+      "complexity": "O(V+E)",
+      "data_structures": ["stack", "adjacency_list"]
+    }
+  },
+  {
+    "id": "bj_5719_platinum5",
+    "label": "Platinum V",
+    "summary": "최단경로 간선을 모두 제거한 '거의 최단 경로' — 다익스트라 + 역추적 간선 삭제 반복",
+    "factors": {
+      "algorithm": "dijkstra_edge_removal",
+      "n_max": 500,
+      "complexity": "O(E log V)",
+      "data_structures": ["priority_queue", "adjacency_list"]
+    }
+  },
+  {
+    "id": "bj_11280_platinum4",
+    "label": "Platinum IV",
+    "summary": "2-SAT 충족 가능성 판정 — 함의 그래프 + SCC (N ≤ 10000, M ≤ 100,000)",
+    "factors": {
+      "algorithm": "two_sat",
+      "n_max": 10000,
+      "complexity": "O(V+E)",
+      "data_structures": ["implication_graph", "scc"]
+    }
+  },
+  {
+    "id": "bj_11375_platinum4",
+    "label": "Platinum IV",
+    "summary": "직원-작업 최대 이분매칭 개수 — 증가 경로 탐색 (N, M ≤ 1000)",
+    "factors": {
+      "algorithm": "bipartite_matching",
+      "n_max": 1000,
+      "complexity": "O(V*E)",
+      "data_structures": ["adjacency_list", "match_array"]
+    }
+  },
+  {
+    "id": "bj_6086_platinum4",
+    "label": "Platinum IV",
+    "summary": "파이프 네트워크 A→Z 최대 유량 — 에드몬드-카프 (노드 ≤ 52)",
+    "factors": {
+      "algorithm": "max_flow",
+      "n_max": 52,
+      "complexity": "O(V*E^2)",
+      "data_structures": ["capacity_matrix", "queue"]
+    }
+  },
+  {
+    "id": "bj_10999_platinum4",
+    "label": "Platinum IV",
+    "summary": "구간 덧셈 갱신 + 구간 합 쿼리 — 레이지 프로퍼게이션 세그먼트 트리 (N ≤ 1,000,000)",
+    "factors": {
+      "algorithm": "lazy_segment_tree",
+      "n_max": 1000000,
+      "complexity": "O(log N) per query",
+      "data_structures": ["lazy_segment_tree"]
+    }
+  },
+  {
+    "id": "bj_2243_platinum4",
+    "label": "Platinum IV",
+    "summary": "사탕상자 — k번째 원소 꺼내기 + 수량 갱신, 펜윅/세그트리 k-th 검색 (맛 등급 ≤ 1,000,000)",
+    "factors": {
+      "algorithm": "fenwick_kth_search",
+      "n_max": 1000000,
+      "complexity": "O(log N) per query",
+      "data_structures": ["fenwick_tree"]
+    }
+  },
+  {
+    "id": "bj_9250_platinum3",
+    "label": "Platinum III",
+    "summary": "패턴 집합 중 하나라도 포함하는지 다수 문자열 판별 — 아호코라식 오토마톤",
+    "factors": {
+      "algorithm": "aho_corasick",
+      "n_max": 10000,
+      "complexity": "O(sum|S| + sum|Q|)",
+      "data_structures": ["trie", "failure_link"]
+    }
+  },
+  {
+    "id": "bj_17131_diamond5",
+    "label": "Diamond V",
+    "summary": "V자(여우 모양)를 이루는 별 세 개 조합 개수 — 좌표 스위핑 + 세그먼트 트리 조합 카운팅 (N ≤ 200,000)",
+    "factors": {
+      "algorithm": "sweep_segment_tree_counting",
+      "n_max": 200000,
+      "complexity": "O(N log N)",
+      "data_structures": ["segment_tree", "coordinate_compression"]
+    }
+  },
+  {
+    "id": "bj_14898_diamond5",
+    "label": "Diamond V",
+    "summary": "온라인 구간 내 서로 다른 수 개수 쿼리 — 퍼시스턴트 세그먼트 트리 (N ≤ 1,000,000)",
+    "factors": {
+      "algorithm": "persistent_segment_tree",
+      "n_max": 1000000,
+      "complexity": "O(log N) per query",
+      "data_structures": ["persistent_segment_tree"]
+    }
+  },
+  {
+    "id": "bj_13519_diamond4",
+    "label": "Diamond IV",
+    "summary": "트리 경로의 최대 연속 부분합 쿼리 + 정점 가중치 갱신 — 링크컷/HLD + 병합형 세그트리 노드 (N ≤ 100,000)",
+    "factors": {
+      "algorithm": "link_cut_tree_path_query",
+      "n_max": 100000,
+      "complexity": "O(log^2 N) per query",
+      "data_structures": ["link_cut_tree", "segment_tree"]
+    }
+  },
+  {
+    "id": "bj_13539_diamond3",
+    "label": "Diamond III",
+    "summary": "동적 트리 link/cut + 경로 가중치 갱신·합 쿼리 — 레이지 링크컷 트리 (N, Q ≤ 100,000)",
+    "factors": {
+      "algorithm": "link_cut_tree_lazy",
+      "n_max": 100000,
+      "complexity": "O(log N) amortized per query",
+      "data_structures": ["link_cut_tree"]
     }
   }
 ]

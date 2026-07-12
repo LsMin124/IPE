@@ -2,7 +2,8 @@
 
 스펙: PROJECT_SPEC.md §4.6 (The Evaluator), IMPLEMENTATION_ROADMAP §1 P9.1
 
-``anchors.json`` 은 4~8개의 anchor를 포함:
+``anchors.json`` 은 Bronze~Diamond 티어를 균형 있게 덮는 40여 개 anchor를 포함
+(RFC R4 확장: Bronze 8 / Silver 10 / Gold 12 / Platinum 10 / Diamond 4). 각 anchor:
 - ``id``: 시스템 식별자 (예: ``bj_1753_gold5``)
 - ``label``: 사람이 읽는 라벨 (예: ``Gold V``)
 - ``summary``: 한 줄 요약

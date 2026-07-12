@@ -33,6 +33,11 @@ from .qa_reviewer import (
     make_qa_reviewer_node,
 )
 from .reconciler import make_v2_reconciler_node
+from .sample_explainer import (
+    AnthropicSampleExplainerLLM,
+    SampleExplainerLLM,
+    make_sample_explainer_node,
+)
 from .sample_filler import make_sample_filler_node
 from .spec_bridge import make_spec_bridge_node
 from .spec_patch import make_spec_patch_node
@@ -49,11 +54,13 @@ __all__ = [
     "AnthropicFormalizerLLM",
     "AnthropicNarrativeLLM",
     "AnthropicQAReviewerLLM",
+    "AnthropicSampleExplainerLLM",
     "AnthropicStrategistLLM",
     "FaithfulnessLLM",
     "FormalizerLLM",
     "NarrativeLLM",
     "QAReviewerLLM",
+    "SampleExplainerLLM",
     "StrategistLLM",
     "make_edge_filler_node",
     "make_faithfulness_node",
@@ -63,6 +70,7 @@ __all__ = [
     "make_narrative_node",
     "make_qa_aggregator_node",
     "make_qa_reviewer_node",
+    "make_sample_explainer_node",
     "make_sample_filler_node",
     "make_spec_bridge_node",
     "make_spec_patch_node",

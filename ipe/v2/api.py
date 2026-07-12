@@ -54,8 +54,9 @@ _PACKAGED_STATUSES = ("success", "fail_qa")
 class GenerateRequest(BaseModel):
     """계약 §2.1 요청 본문.
 
-    ``mode`` (Phase 4 — P1/P2 수렴): ``"p1"``=단일·공개·QA 3종 / ``"p2"``=합성·은닉·
-    QA 4종. 모드 노브(hidden/composition_mode/qa_kinds)는 ``config.mode_knobs`` 가 결정.
+    ``mode`` (Phase 4 — P1/P2 수렴): ``"p1"``=단일·공개·QA 4종(presentation 포함) /
+    ``"p2"``=합성·은닉·QA 5종(+leakage). 모드 노브(hidden/composition_mode/qa_kinds)는
+    ``config.mode_knobs`` 가 결정.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -84,10 +85,13 @@ class _Job:
 
 def _production_graph_factory(req: GenerateRequest) -> Any:
     """CLI 와 동일 모델 구성의 full 그래프. 모드 노브(hidden/composition/qa_kinds)는
-    ``config.mode_knobs`` (P1=단일·공개·QA3 / P2=합성·은닉·QA4)."""
+    ``config.mode_knobs`` (P1=단일·공개·QA4 / P2=합성·은닉·QA5). 예제 설명
+    (sample_explainer, W2B)은 production 항상 켬 — LLM 예외 시 무변경 통과라
+    실패 클래스가 늘지 않는다."""
     from ipe.v1.nodes import AnthropicCoderLLM
 
     from .graph import build_v2_graph
+    from .nodes import AnthropicSampleExplainerLLM
 
     hidden, composition_mode, qa_kinds = config.mode_knobs(req.mode)
     return build_v2_graph(
@@ -96,11 +100,15 @@ def _production_graph_factory(req: GenerateRequest) -> Any:
         golden_llms=[
             AnthropicCoderLLM(m, parse_discipline=True) for m in _GOLDEN_MODELS
         ],
-        brute_llm=AnthropicCoderLLM(_BRUTE_MODEL, parse_discipline=True),
+        brute_llm=AnthropicCoderLLM(
+            _BRUTE_MODEL, parse_discipline=True, brute_mode=True
+        ),
         golden_origins=_GOLDEN_MODELS,
         with_test_suite=True,
         with_qa=req.with_qa,
         qa_kinds=qa_kinds,
+        sample_explainer_llm=AnthropicSampleExplainerLLM(),
+        with_sample_explanations=True,
     )
 
 

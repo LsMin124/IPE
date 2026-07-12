@@ -40,12 +40,14 @@ from ipe.v1.schema import (
     GeneratorContract,
     IOContract,
     IOSchema,
+    OutputInvariant,
     ProblemSpec,
     SampleTestCase,
     ScaleFamily,
 )
 
 from ..generation.input_gen import (
+    derive_degenerate_inputs,
     generate_inputs,
     render_constraints,
     render_input_format,
@@ -61,6 +63,15 @@ from ..state import V2State
 _SAMPLE_COUNT = 3
 _SAMPLE_SIZE_MAX = 5
 _SAMPLE_VALUE_MAX = 20
+
+# 퇴화 의미(도달 불가→-1 등)를 결정해 둔 invariant kind 의 표식 — formalizer 가
+# "edge_case_semantics" 류로 저작한다(LLM 저작 kind 라 접두 변형 허용, substring 매칭).
+_EDGE_INVARIANT_MARKER = "edge_case"
+
+
+def _has_edge_semantics(invariants: tuple[OutputInvariant, ...]) -> bool:
+    """output_invariants 에 edge_case_semantics 류 invariant 가 있나 (순수 판정)."""
+    return any(_EDGE_INVARIANT_MARKER in inv.kind for inv in invariants)
 
 
 def _clamp_value_range(cr: ConstraintRange | None) -> ConstraintRange | None:
@@ -88,7 +99,12 @@ def _sample_io_schema(io_schema: IOSchema) -> IOSchema:
     return io_schema.model_copy(update={"inputs": clamped_fields})
 
 
-def _generate_sample_inputs(io_schema: IOSchema, run_id: str) -> list[str]:
+def _generate_sample_inputs(
+    io_schema: IOSchema,
+    run_id: str,
+    *,
+    output_invariants: tuple[OutputInvariant, ...] = (),
+) -> list[str]:
     """io_schema 에서 결정적·형식정합·소규모 샘플 입력 생성 (A: 샘플-too-short 해소).
 
     composition 으로 io_schema 필드가 늘면 LLM 저작 input 은 토큰이 모자라 골든 파서가
@@ -96,6 +112,13 @@ def _generate_sample_inputs(io_schema: IOSchema, run_id: str) -> list[str]:
     input_gen 직렬화(=골든이 받는 파서 #2 의 짝)로 만들어 필드 수·헤더가 항상 일치하게
     한다. 크기·값 모두 작게 clamp(가독성+큰 값 골든 IndexError 방지). expected 는 하류
     sample_filler 가 golden 실행으로 채운다.
+
+    **경계 샘플 1개 보장** (BOJ 표준 — 지문의 퇴화 의미를 샘플이 시연):
+    ``output_invariants`` 에 edge_case_semantics 류 invariant 가 있고 backbone 파생
+    퇴화 입력(``derive_degenerate_inputs``)이 비어있지 않으면 **마지막 샘플 1개**를 그
+    첫 퇴화 입력으로 교체한다(개수 불변). '도달 불가 → -1' 같은 지문 처방이 샘플로
+    실증돼 solver 가 퇴화 해석을 추측하지 않는다. 순수성(LLM 0) 유지 — 둘 다 IR 의
+    결정론 함수.
     """
     schema = _sample_io_schema(io_schema)
     bounds = tuple(
@@ -114,8 +137,20 @@ def _generate_sample_inputs(io_schema: IOSchema, run_id: str) -> list[str]:
             ScaleFamily(name="sample", case_count=_SAMPLE_COUNT, field_bounds=bounds),
         )
     )
-    cases = generate_inputs(contract, schema, seed=seed_from_run_id(run_id))
-    return [c.input_text for c in cases]
+    # distinct_index_refs — 샘플은 s==t 충돌을 회피해 핵심 로직(경로 탐색 등)을 실제로
+    # 시연한다 (전 샘플 s==t 로 '항상 0 출력' trivial 해석이 가능하던 QA blocker,
+    # run v2-54d68df4 실측). 퇴화 의미 시연은 아래 degenerate 교체 샘플이 전담.
+    cases = generate_inputs(
+        contract, schema, seed=seed_from_run_id(run_id), distinct_index_refs=True
+    )
+    texts = [c.input_text for c in cases]
+    if _has_edge_semantics(output_invariants):
+        # 원본 io_schema 로 파생 — 퇴화 입력은 이미 최소 규모(min/unreachable)라 clamp
+        # 불필요 + reconcile/edge_filler 가 쓰는 것과 동일 입력(고정 seed, IR 함수).
+        degenerate = derive_degenerate_inputs(io_schema)
+        if degenerate:
+            texts[-1] = degenerate[0][1]  # (name, input_text, rationale) 의 input_text
+    return texts
 
 
 def make_spec_bridge_node() -> Callable[[V2State], V2State]:
@@ -151,7 +186,13 @@ def make_spec_bridge_node() -> Callable[[V2State], V2State]:
             # sample_filler 가 canonical golden 실행으로 채운다(LLM 손계산 expected 차단).
             sample_testcases=[
                 SampleTestCase(input_text=text, expected_output="")
-                for text in _generate_sample_inputs(bp.io_schema, state.run_id)
+                for text in _generate_sample_inputs(
+                    bp.io_schema,
+                    state.run_id,
+                    # 경계 샘플 1개 보장 — edge_case_semantics 류 invariant 가 있으면
+                    # 마지막 샘플을 backbone 파생 퇴화 입력으로 교체 (BOJ 표준).
+                    output_invariants=bp.output_invariants,
+                )
             ],
         )
         return state.model_copy(update={"spec": spec})

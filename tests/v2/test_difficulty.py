@@ -181,6 +181,23 @@ def test_user_prompt_includes_solution_and_anchor_ids() -> None:
     assert "최단경로" in text  # 지문
 
 
+def test_system_prompt_has_tier_rubric_and_calibration_rules() -> None:
+    """system prompt 는 절대 티어 rubric + 강화 규율(3-anchor 인용, 복잡도×n_max
+    교차확인, 보수적 하향)을 포함 — anchor 상대 비교의 보정 프레임 회귀 가드."""
+    from ipe.v2.difficulty import _SYSTEM_PROMPT
+
+    # 티어 rubric — Bronze~Diamond 절대 프레임
+    for tier in ("Bronze", "Silver", "Gold", "Platinum", "Diamond"):
+        assert f"- {tier}:" in _SYSTEM_PROMPT
+    # 강화 규율 3종
+    assert "최소 3개" in _SYSTEM_PROMPT  # anchor 인용 하한
+    assert "복잡도 × n_max 교차확인" in _SYSTEM_PROMPT  # 복잡도-규모 정합 체크
+    assert "보수적으로 낮은 쪽" in _SYSTEM_PROMPT  # 애매하면 하향
+    # 기존 규율 보존 (약화 금지)
+    assert "상대 위치" in _SYSTEM_PROMPT
+    assert "제공된 anchor id 중에서만" in _SYSTEM_PROMPT
+
+
 # --------------------------------------------------------------------------- #
 # DB 적재 — meta.difficulty.label → problems.difficulty 1급 컬럼                #
 # --------------------------------------------------------------------------- #

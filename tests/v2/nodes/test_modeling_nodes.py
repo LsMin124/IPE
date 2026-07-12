@@ -369,6 +369,16 @@ def test_strategist_single_user_prompt_omits_composition_palette() -> None:
     assert "도메인 팔레트" in single  # 도메인은 양 모드 공통
 
 
+def test_domain_pool_expanded_and_distinct() -> None:
+    """지문 품질: _DOMAIN_POOL 21→40+ 확장 — pool 이 넓을수록 run 간 도메인 반복이
+    줄어 지문 매너리즘·고전 동형 인식이 함께 분산된다. 중복 없음 + 팔레트 크기 불변."""
+    from ipe.v2.nodes.strategist import _DOMAIN_PALETTE_SIZE, _DOMAIN_POOL
+
+    assert len(_DOMAIN_POOL) >= 40  # 확장 회귀 방지
+    assert len(set(_DOMAIN_POOL)) == len(_DOMAIN_POOL)  # distinct
+    assert _DOMAIN_PALETTE_SIZE == 7  # 회전 메커니즘 불변
+
+
 def test_strategist_prompt_encourages_domain_diversity() -> None:
     """domain 다양성 규율 — DB 16문제 실측 banking 100% 단일화(composition fenwick
     68% 보다 심함, domain 은 strategist 자유선택). 해법: 매 run 회전하는 결정적

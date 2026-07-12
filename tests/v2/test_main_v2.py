@@ -178,8 +178,10 @@ def test_main_p1_mode_prints_single_public(
     assert "mode=p1" in out
     assert "hidden=False" in out  # P1 = 공개
     assert "composition=single" in out
-    # P1 qa_kinds 는 leakage 제외 3종
-    assert "qa_kinds=['ambiguity', 'fairness', 'difficulty']" in out
+    # P1 qa_kinds 는 leakage 제외 4종 (presentation 포함)
+    assert (
+        "qa_kinds=['ambiguity', 'fairness', 'difficulty', 'presentation']" in out
+    )
 
 
 def test_main_default_mode_is_p2(capsys: pytest.CaptureFixture[str]) -> None:
